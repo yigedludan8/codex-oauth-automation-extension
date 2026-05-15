@@ -236,9 +236,9 @@
       const tabId = typeof getTabId === 'function' ? await getTabId('signup-page') : 0;
       const url = STEP8_ADD_EMAIL_URL;
       if (tabId && chrome?.tabs?.update) {
-        await chrome.tabs.update(tabId, { url, active: true });
+        await chrome.tabs.update(tabId, { url, active: false });
       } else if (typeof reuseOrCreateTab === 'function') {
-        await reuseOrCreateTab('signup-page', url);
+        await reuseOrCreateTab('signup-page', url, { background: true });
       } else {
         throw new Error(`Step ${visibleStep}: cannot reopen add-email page for Step 8 recovery.`);
       }
@@ -336,18 +336,17 @@
       if (alive) {
         if (mail.navigateOnReuse) {
           await reuseOrCreateTab(mail.source, mail.url, {
+            background: true,
             inject: mail.inject,
             injectSource: mail.injectSource,
           });
           return;
         }
-
-        const tabId = await getTabId(mail.source);
-        await chrome.tabs.update(tabId, { active: true });
         return;
       }
 
       await reuseOrCreateTab(mail.source, mail.url, {
+        background: true,
         inject: mail.inject,
         injectSource: mail.injectSource,
       });
@@ -390,13 +389,11 @@
       activeFetchLoginCodeStep = visibleStep;
       const authTabId = await getTabId('signup-page');
 
-      if (authTabId) {
-        await chrome.tabs.update(authTabId, { active: true });
-      } else {
+      if (!authTabId) {
         if (!state.oauthUrl) {
           throw new Error(`缺少登录用 OAuth 链接，请先完成步骤 ${getAuthLoginStepForVisibleStep(visibleStep)}。`);
         }
-        await reuseOrCreateTab('signup-page', state.oauthUrl);
+        await reuseOrCreateTab('signup-page', state.oauthUrl, { background: true });
       }
 
       const stateLastResendAt = Number(state?.loginVerificationRequestedAt) || 0;

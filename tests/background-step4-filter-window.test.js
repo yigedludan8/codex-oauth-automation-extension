@@ -65,9 +65,7 @@ test('step 4 passes a fixed 10-minute lookback window to 2925 mailbox polling', 
 
   assert.equal(ensureCalls, 1);
   assert.deepStrictEqual(tabReuses, []);
-  assert.deepStrictEqual(tabUpdates, [
-    { tabId: 1, payload: { active: true } },
-  ]);
+  assert.deepStrictEqual(tabUpdates, []);
   assert.equal(capturedOptions.filterAfterTimestamp, 100000);
   assert.equal(capturedOptions.resendIntervalMs, 0);
 });

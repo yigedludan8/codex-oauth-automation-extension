@@ -92,18 +92,17 @@
       if (alive) {
         if (mail.navigateOnReuse) {
           await reuseOrCreateTab(mail.source, mail.url, {
+            background: true,
             inject: mail.inject,
             injectSource: mail.injectSource,
           });
           return;
         }
-
-        const tabId = await getTabId(mail.source);
-        await chrome.tabs.update(tabId, { active: true });
         return;
       }
 
       await reuseOrCreateTab(mail.source, mail.url, {
+        background: true,
         inject: mail.inject,
         injectSource: mail.injectSource,
       });
@@ -118,7 +117,6 @@
         throw new Error('认证页面标签页已关闭，无法继续步骤 4。请先执行步骤 1 或步骤 2，重新打开认证页后再试。');
       }
 
-      await chrome.tabs.update(signupTabId, { active: true });
       throwIfStopped();
       if (typeof waitForTabStableComplete === 'function') {
         await addLog('步骤 4：等待注册验证码页面完成加载后再继续...', 'info');

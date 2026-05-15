@@ -532,9 +532,10 @@
     }
 
     async function reuseOrCreateTab(source, url, options = {}) {
+      const shouldActivateTab = options.background ? false : true;
       if (options.forceNew) {
         await closeConflictingTabsForSource(source, url);
-        const tab = await chrome.tabs.create({ url, active: true });
+        const tab = await chrome.tabs.create({ url, active: shouldActivateTab });
 
         if (options.inject) {
           await waitForTabUpdateComplete(tab.id);
@@ -567,7 +568,9 @@
 
         const registry = await getTabRegistry();
         if (sameUrl) {
-          await chrome.tabs.update(tabId, { active: true });
+          if (shouldActivateTab) {
+            await chrome.tabs.update(tabId, { active: true });
+          }
           if (shouldReloadOnReuse) {
             if (registry[source]) registry[source].ready = false;
             await setState({ tabRegistry: registry });
@@ -600,7 +603,7 @@
 
         if (registry[source]) registry[source].ready = false;
         await setState({ tabRegistry: registry });
-        await chrome.tabs.update(tabId, { url, active: true });
+        await chrome.tabs.update(tabId, { url, active: shouldActivateTab });
 
         await waitForTabUpdateComplete(tabId);
 
@@ -626,7 +629,7 @@
       }
 
       await closeConflictingTabsForSource(source, url);
-      const tab = await chrome.tabs.create({ url, active: true });
+      const tab = await chrome.tabs.create({ url, active: shouldActivateTab });
 
       if (options.inject) {
         await waitForTabUpdateComplete(tab.id);

@@ -211,7 +211,6 @@
         await addLog('步骤 2：未发现可用的注册页标签，正在重新打开 ChatGPT 官网...', 'warn');
         signupTabId = (await ensureSignupEntryPageReady(2)).tabId;
       } else {
-        await chrome.tabs.update(signupTabId, { active: true });
         await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
           inject: SIGNUP_PAGE_INJECT_FILES,
           injectSource: 'signup-page',

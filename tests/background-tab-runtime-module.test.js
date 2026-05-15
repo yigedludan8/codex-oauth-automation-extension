@@ -188,3 +188,40 @@ test('tab runtime waitForTabStableComplete waits through a late navigation after
   assert.equal(result?.status, 'complete');
   assert.ok(getCalls >= 4);
 });
+
+test('tab runtime reuseOrCreateTab can reuse an existing tab in background without activating it', async () => {
+  const source = fs.readFileSync('background/tab-runtime.js', 'utf8');
+  const globalScope = {};
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundTabRuntime;`)(globalScope);
+
+  const updates = [];
+  const runtime = api.createTabRuntime({
+    LOG_PREFIX: '[test]',
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        get: async () => ({ id: 9, url: 'https://example.com', status: 'complete' }),
+        query: async () => [],
+        update: async (tabId, payload) => {
+          updates.push({ tabId, payload });
+          return { id: tabId, url: payload?.url || 'https://example.com', status: 'complete' };
+        },
+      },
+    },
+    getSourceLabel: (sourceName) => sourceName || 'unknown',
+    getState: async () => ({
+      tabRegistry: { 'signup-page': { tabId: 9, ready: true } },
+      sourceLastUrls: {},
+    }),
+    matchesSourceUrlFamily: () => false,
+    setState: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const tabId = await runtime.reuseOrCreateTab('signup-page', 'https://example.com', {
+    background: true,
+  });
+
+  assert.equal(tabId, 9);
+  assert.deepEqual(updates, []);
+});

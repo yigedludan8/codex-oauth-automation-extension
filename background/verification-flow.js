@@ -467,7 +467,6 @@
       }
 
       throwIfStopped();
-      await chrome.tabs.update(signupTabId, { active: true });
       throwIfStopped();
 
       const result = await sendToContentScript('signup-page', {
@@ -502,7 +501,6 @@
       if (currentState.mailProvider === '2925') {
         const mailTabId = await getTabId('mail-2925');
         if (mailTabId) {
-          await chrome.tabs.update(mailTabId, { active: true });
           await addLog(`步骤 ${step}：已切换到 2925 邮箱标签页等待新邮件。`, 'info');
         }
       }
@@ -1042,7 +1040,6 @@
         throw new Error('认证页面标签页已关闭，无法填写验证码。');
       }
 
-      await chrome.tabs.update(signupTabId, { active: true });
       const baseResponseTimeoutMs = await getResponseTimeoutMsForStep(
         step,
         options,

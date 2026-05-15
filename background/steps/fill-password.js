@@ -89,7 +89,6 @@
       });
       await setState({ accounts });
 
-      await chrome.tabs.update(signupTabId, { active: true });
       await ensureContentScriptReadyOnTab('signup-page', signupTabId, {
         inject: SIGNUP_PAGE_INJECT_FILES,
         injectSource: 'signup-page',

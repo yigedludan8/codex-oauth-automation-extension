@@ -182,3 +182,167 @@ return {
     },
   });
 });
+
+test('step9 falls back to foreground retry when background consent click has no effect', async () => {
+  const api = new Function('step9ModuleSource', `
+const self = {};
+let webNavListener = null;
+let webNavCommittedListener = null;
+let step8TabUpdatedListener = null;
+let step8PendingReject = null;
+const tabUpdates = [];
+const clickCalls = [];
+const effectCalls = [];
+const strategyCalls = [];
+let completePayload = null;
+const callbackUrl = 'http://localhost:1455/auth/callback?code=abc&state=xyz';
+
+const chrome = {
+  webNavigation: {
+    onBeforeNavigate: { addListener(listener) { webNavListener = listener; }, removeListener() {} },
+    onCommitted: { addListener(listener) { webNavCommittedListener = listener; }, removeListener() {} },
+  },
+  tabs: {
+    onUpdated: { addListener(listener) { step8TabUpdatedListener = listener; }, removeListener() {} },
+    async update(tabId, payload) {
+      tabUpdates.push({ tabId, payload });
+      return { id: tabId, url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent', status: 'complete' };
+    },
+  },
+};
+
+async function addLog() {}
+function cleanupStep8NavigationListeners() {}
+function throwIfStep8SettledOrStopped(resolved) {
+  if (resolved) throw new Error('already resolved');
+}
+async function getTabId() { return 123; }
+async function isTabAlive() { return true; }
+async function ensureStep8SignupPageReady() {}
+async function getOAuthFlowStepTimeoutMs(defaultTimeoutMs) { return defaultTimeoutMs; }
+async function getOAuthFlowRemainingMs() { return null; }
+async function recoverOAuthLocalhostTimeout() { return null; }
+async function waitForStep8Ready() {
+  return {
+    consentReady: true,
+    url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
+  };
+}
+async function triggerStep8ContentStrategy(tabId, strategy) {
+  strategyCalls.push({ tabId, strategy });
+}
+async function waitForStep8ClickEffect() {
+  effectCalls.push(effectCalls.length + 1);
+  if (effectCalls.length === 1) {
+    return { progressed: false, reason: 'no_effect' };
+  }
+  if (typeof webNavListener === 'function') {
+    setTimeout(() => {
+      if (typeof webNavListener === 'function') {
+        webNavListener({ tabId: 123, frameId: 0, url: callbackUrl });
+      }
+    }, 0);
+  }
+  return { progressed: true, reason: 'url_changed', url: 'https://chatgpt.com/' };
+}
+function getStep8CallbackUrlFromNavigation(details, signupTabId) {
+  return Number(details?.tabId) === Number(signupTabId) ? details.url : '';
+}
+function getStep8CallbackUrlFromTabUpdate() { return ''; }
+function getStep8EffectLabel() { return 'URL 已变化'; }
+async function prepareStep8DebuggerClick() { return { rect: { centerX: 10, centerY: 10 } }; }
+async function clickWithDebugger(tabId, rect) {
+  clickCalls.push({ tabId, rect });
+}
+async function reloadStep8ConsentPage() {}
+async function reuseOrCreateTab() { return 123; }
+async function sleepWithStop() {}
+function setWebNavListener(listener) { webNavListener = listener; }
+function getWebNavListener() { return webNavListener; }
+function setWebNavCommittedListener(listener) { webNavCommittedListener = listener; }
+function getWebNavCommittedListener() { return webNavCommittedListener; }
+function setStep8TabUpdatedListener(listener) { step8TabUpdatedListener = listener; }
+function getStep8TabUpdatedListener() { return step8TabUpdatedListener; }
+function setStep8PendingReject(handler) { step8PendingReject = handler; }
+async function completeStepFromBackground(step, payload) {
+  completePayload = { step, payload };
+}
+
+const STEP8_CLICK_RETRY_DELAY_MS = 1;
+const STEP8_READY_WAIT_TIMEOUT_MS = 5;
+const STEP8_MAX_ROUNDS = 1;
+const STEP8_STRATEGIES = [
+  { mode: 'content', strategy: 'requestSubmit', label: 'form.requestSubmit' },
+];
+
+${step9ModuleSource}
+
+const executor = self.MultiPageBackgroundStep9.createStep9Executor({
+  addLog,
+  chrome,
+  cleanupStep8NavigationListeners,
+  clickWithDebugger,
+  completeStepFromBackground,
+  ensureStep8SignupPageReady,
+  getOAuthFlowRemainingMs,
+  getOAuthFlowStepTimeoutMs,
+  getStep8CallbackUrlFromNavigation,
+  getStep8CallbackUrlFromTabUpdate,
+  getStep8EffectLabel,
+  getTabId,
+  getWebNavCommittedListener,
+  getWebNavListener,
+  getStep8TabUpdatedListener,
+  isTabAlive,
+  prepareStep8DebuggerClick,
+  recoverOAuthLocalhostTimeout,
+  reloadStep8ConsentPage,
+  reuseOrCreateTab,
+  setStep8PendingReject,
+  setStep8TabUpdatedListener,
+  setWebNavCommittedListener,
+  setWebNavListener,
+  sleepWithStop,
+  STEP8_CLICK_RETRY_DELAY_MS,
+  STEP8_MAX_ROUNDS,
+  STEP8_READY_WAIT_TIMEOUT_MS,
+  STEP8_STRATEGIES,
+  throwIfStep8SettledOrStopped,
+  triggerStep8ContentStrategy,
+  waitForStep8ClickEffect,
+  waitForStep8Ready,
+});
+
+return {
+  executeStep9: executor.executeStep9,
+  snapshot() {
+    return {
+      tabUpdates,
+      clickCalls,
+      effectCalls,
+      strategyCalls,
+      completePayload,
+      hasPendingReject: Boolean(step8PendingReject),
+    };
+  },
+};
+`)(step9ModuleSource);
+
+  await api.executeStep9({
+    oauthUrl: 'https://auth.openai.com/original-oauth',
+    visibleStep: 9,
+  });
+
+  const snapshot = api.snapshot();
+  assert.equal(snapshot.strategyCalls.length, 2);
+  assert.equal(snapshot.effectCalls.length, 2);
+  assert.deepEqual(snapshot.tabUpdates, [
+    { tabId: 123, payload: { active: true } },
+  ]);
+  assert.deepEqual(snapshot.completePayload, {
+    step: 9,
+    payload: {
+      localhostUrl: 'http://localhost:1455/auth/callback?code=abc&state=xyz',
+    },
+  });
+});

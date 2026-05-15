@@ -816,9 +816,7 @@ test('step 8 uses a fixed 10-minute lookback window and disables resend interval
     actionLabel: 'Step 8: ensure 2925 mailbox session',
   });
   assert.deepStrictEqual(tabReuses, []);
-  assert.deepStrictEqual(tabUpdates, [
-    { tabId: 1, payload: { active: true } },
-  ]);
+  assert.deepStrictEqual(tabUpdates, []);
   assert.equal(capturedOptions.filterAfterTimestamp, 300000);
   assert.equal(capturedOptions.resendIntervalMs, 0);
   assert.equal(capturedOptions.targetEmail, '');

@@ -2,10 +2,10 @@
   root.MultiPageBackgroundStep9 = factory();
 })(typeof self !== 'undefined' ? self : globalThis, function createBackgroundStep9Module() {
   function createStep9Executor(deps = {}) {
-    const {
-      addLog,
-      chrome,
-      cleanupStep8NavigationListeners,
+	      const {
+	        addLog,
+	        chrome,
+	        cleanupStep8NavigationListeners,
       clickWithDebugger,
       completeStepFromBackground,
       ensureStep8SignupPageReady,
@@ -32,8 +32,8 @@
       setWebNavListener,
       setWebNavCommittedListener,
       setStep8PendingReject,
-      setStep8TabUpdatedListener,
-    } = deps;
+	        setStep8TabUpdatedListener,
+	      } = deps;
 
     const LOCALHOST_CALLBACK_LOCAL_TIMEOUT_MS = 240000;
     const CALLBACK_TIMEOUT_CHECK_INTERVAL_MS = 1000;
@@ -51,7 +51,7 @@
       return addLog(message, level, { step, stepKey: 'confirm-oauth' });
     }
 
-    async function executeStep9(state) {
+	    async function executeStep9(state) {
       const visibleStep = getVisibleStep(state, 9);
       let activeState = state;
 
@@ -181,19 +181,20 @@
           finalizeStep9Callback(callbackUrl);
         });
 
-        (async () => {
-          try {
+	        (async () => {
+	          try {
             throwIfStep8SettledOrStopped(resolved);
             signupTabId = await getTabId('signup-page');
             throwIfStep8SettledOrStopped(resolved);
 
-            if (signupTabId && await isTabAlive('signup-page')) {
-              await chrome.tabs.update(signupTabId, { active: true });
-              await addStepLog(visibleStep, '已切回认证页，正在准备调试器点击...');
-            } else {
-              signupTabId = await reuseOrCreateTab('signup-page', activeState.oauthUrl);
-              await addStepLog(visibleStep, '已重新打开认证页，正在准备调试器点击...');
-            }
+	            if (signupTabId && await isTabAlive('signup-page')) {
+	              await addStepLog(visibleStep, '已定位认证页，正在后台准备点击授权“继续”按钮...');
+	            } else {
+	              signupTabId = await reuseOrCreateTab('signup-page', activeState.oauthUrl, {
+	                background: true,
+	              });
+	              await addStepLog(visibleStep, '已在后台重新打开认证页，正在准备点击授权“继续”按钮...');
+	            }
 
             throwIfStep8SettledOrStopped(resolved);
             chrome.webNavigation.onBeforeNavigate.addListener(deps.getWebNavListener());
@@ -264,20 +265,63 @@
                 return;
               }
 
-              const effect = await waitForStep8ClickEffect(
-                signupTabId,
-                pageState.url,
-                typeof getOAuthFlowStepTimeoutMs === 'function'
+	              let effect = await waitForStep8ClickEffect(
+	                signupTabId,
+	                pageState.url,
+	                typeof getOAuthFlowStepTimeoutMs === 'function'
                   ? await getOAuthFlowStepTimeoutMs(15000, {
                     step: visibleStep,
                     actionLabel: '等待 OAuth 同意页点击生效',
-                  })
-                  : 15000,
-                { visibleStep }
-              );
-              if (resolved) {
-                return;
-              }
+	                  })
+	                  : 15000,
+	                { visibleStep }
+	              );
+	              if (!effect?.progressed && effect?.reason === 'no_effect') {
+	                await addStepLog(visibleStep, '后台点击“继续”未生效，正在切到前台再重试一次...', 'warn');
+	                await chrome.tabs.update(signupTabId, { active: true });
+	                const foregroundRetryStrategy = STEP8_STRATEGIES[Math.min(round - 1, STEP8_STRATEGIES.length - 1)];
+	                if (foregroundRetryStrategy.mode === 'debugger') {
+	                  const retryClickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
+	                    ? await getOAuthFlowStepTimeoutMs(15000, {
+	                      step: visibleStep,
+	                      actionLabel: '前台重试定位 OAuth 同意页继续按钮',
+	                    })
+	                    : 15000;
+	                  const retryClickTarget = await prepareStep8DebuggerClick(signupTabId, {
+	                    timeoutMs: retryClickActionTimeoutMs,
+	                    responseTimeoutMs: retryClickActionTimeoutMs,
+	                    visibleStep,
+	                  });
+	                  throwIfStep8SettledOrStopped(resolved);
+	                  await clickWithDebugger(signupTabId, retryClickTarget?.rect, { visibleStep });
+	                } else {
+	                  const retryClickActionTimeoutMs = typeof getOAuthFlowStepTimeoutMs === 'function'
+	                    ? await getOAuthFlowStepTimeoutMs(15000, {
+	                      step: visibleStep,
+	                      actionLabel: '前台重试点击 OAuth 同意页继续按钮',
+	                    })
+	                    : 15000;
+	                  await triggerStep8ContentStrategy(signupTabId, foregroundRetryStrategy.strategy, {
+	                    timeoutMs: retryClickActionTimeoutMs,
+	                    responseTimeoutMs: retryClickActionTimeoutMs,
+	                    visibleStep,
+	                  });
+	                }
+	                effect = await waitForStep8ClickEffect(
+	                  signupTabId,
+	                  pageState.url,
+	                  typeof getOAuthFlowStepTimeoutMs === 'function'
+	                    ? await getOAuthFlowStepTimeoutMs(15000, {
+	                      step: visibleStep,
+	                      actionLabel: '等待 OAuth 同意页前台重试点击生效',
+	                    })
+	                    : 15000,
+	                  { visibleStep }
+	                );
+	              }
+	              if (resolved) {
+	                return;
+	              }
 
               if (effect.progressed) {
                 await addStepLog(visibleStep, `检测到本次点击已生效，${getStep8EffectLabel(effect)}，继续等待 localhost 回调...`, 'info');
