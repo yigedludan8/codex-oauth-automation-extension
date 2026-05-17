@@ -7642,6 +7642,11 @@ function isGpcTaskEndedFailure(error) {
   return /GPC_TASK_ENDED::/i.test(message);
 }
 
+function isAccountDeactivatedFailure(error) {
+  const message = getErrorMessage(error);
+  return /account_deactivated|该账户已被删除或停用|该帐户已被删除或停用|账号已被删除或停用|账户已被删除或停用/i.test(message);
+}
+
 function isGoPayCheckoutRestartRequiredFailure(error) {
   const message = getErrorMessage(error);
   return /GOPAY_RESTART_FROM_STEP6::|GOPAY_RETRY_REQUIRED::/i.test(message);
@@ -9380,7 +9385,11 @@ async function runReauthEmailList(rawEmails = []) {
         }
         failureCount += 1;
         await setStepStatus(7, 'failed').catch(() => {});
-        await addLog(`重新认证：邮箱 ${email} 处理失败：${getErrorMessage(error)}`, 'error');
+        if (isAccountDeactivatedFailure(error)) {
+          await addLog(`重新认证：邮箱 ${email} 对应账号已被删除或停用，已跳过并继续下一条。`, 'warn');
+        } else {
+          await addLog(`重新认证：邮箱 ${email} 处理失败：${getErrorMessage(error)}`, 'error');
+        }
       }
     }
 

@@ -145,6 +145,7 @@ const LOGIN_PHONE_ENTRY_PAGE_PATTERN = /(?:\+\s*\(?\d{1,4}\)?\s*)?(?:手机号�
 const LOGIN_MORE_OPTIONS_PATTERN = /更多(?:选项|登录方式|方式)|其他(?:登录方式|选项|方式)|显示更多|more\s+(?:login\s+|sign[-\s]*in\s+)?options|other\s+(?:login\s+|sign[-\s]*in\s+)?(?:options|ways)|show\s+more/i;
 const LOGIN_EXTERNAL_IDP_PATTERN = /google|microsoft|apple|sso|single\s+sign[-\s]*on|企业|工作区|workspace/i;
 const LOGIN_CODE_ONLY_ACTION_PATTERN = /one[-\s]*time|passcode|use\s+(?:a\s+)?code|验证码|一次性/i;
+const LOGIN_ACCOUNT_DEACTIVATED_PATTERN = /account_deactivated|该账户已被删除或停用|该帐户已被删除或停用|账号已被删除或停用|账户已被删除或停用|you\s+don'?t\s+have\s+an?\s+account.*deleted\s+or\s+deactivated/i;
 
 const RESEND_VERIFICATION_CODE_PATTERN = /重新发送(?:验证码)?|再次发送(?:验证码)?|重发(?:验证码)?|未收到(?:验证码|邮件)|resend(?:\s+code)?|send\s+(?:a\s+)?new\s+code|send\s+(?:it\s+)?again|request\s+(?:a\s+)?new\s+code|didn'?t\s+receive/i;
 
@@ -3889,6 +3890,7 @@ function findLoginMoreOptionsTrigger() {
 }
 
 function inspectLoginAuthState() {
+  const pageText = getPageTextSnapshot();
   const retryState = getLoginTimeoutErrorPageState();
   const verificationTarget = getVerificationCodeTarget();
   const passwordInput = getLoginPasswordInput();
@@ -3931,7 +3933,15 @@ function inspectLoginAuthState() {
     phoneVerificationPage,
     oauthConsentPage,
     consentReady,
+    accountDeactivated: LOGIN_ACCOUNT_DEACTIVATED_PATTERN.test(pageText),
   };
+
+  if (baseState.accountDeactivated) {
+    return {
+      ...baseState,
+      state: 'account_deactivated',
+    };
+  }
 
   if (retryState) {
     return {
@@ -4025,6 +4035,7 @@ function serializeLoginAuthState(snapshot) {
     detailMatched: Boolean(snapshot?.detailMatched),
     maxCheckAttemptsBlocked: Boolean(snapshot?.maxCheckAttemptsBlocked),
     emailInUseBlocked: Boolean(snapshot?.emailInUseBlocked),
+    accountDeactivated: Boolean(snapshot?.accountDeactivated),
     hasVerificationTarget: Boolean(snapshot?.verificationTarget),
     hasPasswordInput: Boolean(snapshot?.passwordInput),
     hasEmailInput: Boolean(snapshot?.emailInput),
@@ -4056,6 +4067,8 @@ function getLoginAuthStateLabel(snapshot) {
       return '手机号输入页';
     case 'phone_verification_page':
       return '手机验证码页';
+    case 'account_deactivated':
+      return '账号已停用';
     case 'login_timeout_error_page':
       return '登录超时报错页';
     case 'oauth_consent_page':
