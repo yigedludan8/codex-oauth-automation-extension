@@ -547,6 +547,17 @@
           <button id="btn-fetch-email" class="btn btn-outline btn-sm data-inline-btn" type="button">获取</button>
         </div>
       </div>
+      <div class="data-row data-check-row" id="row-reauth-email-list">
+        <span class="data-label">重新认证</span>
+        <div class="hotmail-import-box">
+          <textarea id="input-reauth-email-list" class="data-textarea mono" rows="4"
+            placeholder="每行一个邮箱，用于重新授权 token 过期账号&#10;例如&#10;user1@example.com&#10;user2@example.com"></textarea>
+          <div class="data-inline hotmail-actions-row">
+            <button id="btn-start-reauth-email-list" class="btn btn-primary btn-sm" type="button">逐个重新认证</button>
+          </div>
+          <div id="reauth-email-list-summary" class="icloud-summary">只执行第 7-10 步，按邮箱列表顺序依次重新授权。</div>
+        </div>
+      </div>
       <div class="data-row module-divider-start" id="row-auto-delay-settings">
         <span class="data-label">第六步</span>
         <div class="data-inline setting-pair auto-delay-setting-pair">

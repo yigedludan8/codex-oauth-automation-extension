@@ -89,3 +89,32 @@ test('SAVE_SETTING broadcasts free phone reuse setting updates for realtime side
     'expected SAVE_SETTING to broadcast free reuse switch updates'
   );
 });
+
+test('message router starts reauth email list runner with normalized emails', async () => {
+  const source = fs.readFileSync('background/message-router.js', 'utf8');
+  const globalScope = { console };
+  const api = new Function('self', `${source}; return self.MultiPageBackgroundMessageRouter;`)(globalScope);
+  const calls = [];
+
+  const router = api.createMessageRouter({
+    addLog: async () => {},
+    ensureManualInteractionAllowed: async () => ({}),
+    clearStopRequest: () => {},
+    normalizeEmailList: (value = []) => (Array.isArray(value) ? value.map((item) => String(item || '').trim().toLowerCase()).filter(Boolean) : []),
+    runReauthEmailList: async (emails) => {
+      calls.push(emails);
+      return { ok: true, total: emails.length, successCount: 0, failureCount: 0 };
+    },
+  });
+
+  const response = await router.handleMessage({
+    type: 'START_REAUTH_EMAIL_LIST',
+    source: 'sidepanel',
+    payload: {
+      emails: ['User1@Example.com', 'user2@example.com'],
+    },
+  });
+
+  assert.equal(response.ok, true);
+  assert.deepStrictEqual(calls, [['user1@example.com', 'user2@example.com']]);
+});

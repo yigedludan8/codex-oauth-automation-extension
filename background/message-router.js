@@ -80,6 +80,7 @@
       markCurrentRegistrationAccountUsed,
       normalizeHotmailAccounts,
       normalizeMail2925Accounts,
+      normalizeEmailList = (value = []) => Array.isArray(value) ? value : [],
       normalizePayPalAccounts,
       normalizeRunCount,
       AUTO_RUN_TIMER_KIND_SCHEDULED_START,
@@ -90,6 +91,7 @@
       pollContributionStatus,
       registerTab,
       requestStop,
+      runReauthEmailList,
       probeIpProxyExit,
       handleCloudflareSecurityBlocked,
       resetState,
@@ -840,6 +842,14 @@
           await setState({ autoRunSkipFailures });
           startAutoRunLoop(totalRuns, { autoRunSkipFailures, mode });
           return { ok: true };
+        }
+
+        case 'START_REAUTH_EMAIL_LIST': {
+          clearStopRequest();
+          await ensureManualInteractionAllowed('批量重新认证邮箱列表');
+          const emails = normalizeEmailList(message.payload?.emails);
+          const result = await runReauthEmailList(emails);
+          return result || { ok: true };
         }
 
         case 'SCHEDULE_AUTO_RUN': {

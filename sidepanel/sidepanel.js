@@ -50,6 +50,9 @@ const displayLocalhostUrl = document.getElementById('display-localhost-url');
 const displayStatus = document.getElementById('display-status');
 const statusBar = document.getElementById('status-bar');
 const inputEmail = document.getElementById('input-email');
+const inputReauthEmailList = document.getElementById('input-reauth-email-list');
+const btnStartReauthEmailList = document.getElementById('btn-start-reauth-email-list');
+const reauthEmailListSummary = document.getElementById('reauth-email-list-summary');
 const inputSignupPhone = document.getElementById('input-signup-phone');
 const inputPassword = document.getElementById('input-password');
 const btnToggleVpsUrl = document.getElementById('btn-toggle-vps-url');
@@ -1433,6 +1436,27 @@ function showToast(message, type = 'error', duration = 4000) {
   if (duration > 0) {
     setTimeout(() => dismissToast(toast), duration);
   }
+}
+
+function parseReauthEmailList(value = '') {
+  const rawLines = String(value || '')
+    .split(/[\r\n]+/)
+    .map((line) => String(line || '').trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const emails = [];
+  for (const line of rawLines) {
+    const normalized = line.toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
+      continue;
+    }
+    if (seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    emails.push(normalized);
+  }
+  return emails;
 }
 
 function dismissToast(toast) {
@@ -10891,6 +10915,37 @@ btnFetchEmail.addEventListener('click', async () => {
     return;
   }
   await fetchGeneratedEmail().catch(() => { });
+});
+
+btnStartReauthEmailList?.addEventListener('click', async () => {
+  const emails = parseReauthEmailList(inputReauthEmailList?.value || '');
+  if (!emails.length) {
+    showToast('请先粘贴邮箱列表，每行一个有效邮箱。', 'warn');
+    return;
+  }
+
+  try {
+    btnStartReauthEmailList.disabled = true;
+    if (reauthEmailListSummary) {
+      reauthEmailListSummary.textContent = `正在按顺序重新认证 ${emails.length} 个邮箱...`;
+    }
+    const response = await chrome.runtime.sendMessage({
+      type: 'START_REAUTH_EMAIL_LIST',
+      source: 'sidepanel',
+      payload: { emails },
+    });
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    showToast(`已开始逐个重新认证 ${emails.length} 个邮箱。`, 'success', 2200);
+  } catch (error) {
+    showToast(`启动重新认证失败：${error.message || error}`, 'error');
+    if (reauthEmailListSummary) {
+      reauthEmailListSummary.textContent = '只执行第 7-10 步，按邮箱列表顺序依次重新授权。';
+    }
+  } finally {
+    btnStartReauthEmailList.disabled = false;
+  }
 });
 
 btnTogglePassword.addEventListener('click', () => {

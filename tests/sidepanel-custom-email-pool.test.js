@@ -64,6 +64,15 @@ test('sidepanel html exposes custom email pool generator option and input row', 
   assert.match(html, /id="input-custom-mail-provider-pool"/);
 });
 
+test('sidepanel html exposes reauth email list tools', () => {
+  const html = fs.readFileSync('sidepanel/sidepanel.html', 'utf8');
+
+  assert.match(html, /id="row-reauth-email-list"/);
+  assert.match(html, /id="input-reauth-email-list"/);
+  assert.match(html, /id="btn-start-reauth-email-list"/);
+  assert.match(html, /id="reauth-email-list-summary"/);
+});
+
 test('sidepanel locks run count to custom email pool size', () => {
   const bundle = [
     extractFunction('isCustomMailProvider'),

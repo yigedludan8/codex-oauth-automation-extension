@@ -1509,6 +1509,24 @@ function normalizeRunCount(value) {
   return Math.max(1, Math.floor(numeric));
 }
 
+function normalizeEmailList(value = []) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || '')
+      .split(/[\r\n,，;；]+/);
+  const normalized = [];
+  const seen = new Set();
+  source.forEach((entry) => {
+    const email = String(entry || '').trim().toLowerCase();
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email) || seen.has(email)) {
+      return;
+    }
+    seen.add(email);
+    normalized.push(email);
+  });
+  return normalized;
+}
+
 function normalizeAutoRunTimerKind(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === AUTO_RUN_TIMER_KIND_SCHEDULED_START) {
@@ -9304,6 +9322,80 @@ async function executeStepAndWait(step, delayAfter = 2000) {
   }
 }
 
+let reauthEmailListRunning = false;
+
+async function runReauthEmailList(rawEmails = []) {
+  if (reauthEmailListRunning) {
+    throw new Error('当前已有重新认证任务正在执行，请稍后再试。');
+  }
+
+  const emails = normalizeEmailList(rawEmails);
+  if (!emails.length) {
+    throw new Error('没有可用于重新认证的有效邮箱。');
+  }
+
+  const state = await ensureManualInteractionAllowed('批量重新认证邮箱列表');
+  if (Object.values(state.stepStatuses || {}).some((status) => status === 'running')) {
+    throw new Error('当前有步骤正在执行，请先等待当前流程结束。');
+  }
+
+  reauthEmailListRunning = true;
+  clearStopRequest();
+
+  let successCount = 0;
+  let failureCount = 0;
+  try {
+    await addLog(`重新认证：准备按顺序处理 ${emails.length} 个邮箱，仅执行步骤 7-10。`, 'info');
+    for (let index = 0; index < emails.length; index += 1) {
+      throwIfStopped();
+      const email = emails[index];
+      const currentNo = index + 1;
+      await addLog(`重新认证：开始处理第 ${currentNo}/${emails.length} 个邮箱 ${email}。`, 'info');
+
+      try {
+        await setEmailStateSilently(email);
+        await setState({
+          accountIdentifierType: 'email',
+          accountIdentifier: email,
+          localhostUrl: null,
+          lastLoginCode: null,
+          loginVerificationRequestedAt: null,
+          oauthFlowDeadlineAt: null,
+          oauthFlowDeadlineSourceUrl: null,
+        });
+        await invalidateDownstreamAfterStepRestart(6, {
+          logLabel: `重新认证：邮箱 ${email} 从步骤 7 重新开始`,
+        });
+
+        await executeStepAndWait(7);
+        await executeStepAndWait(8);
+        await executeStepAndWait(9);
+        await executeStepAndWait(10);
+
+        successCount += 1;
+        await addLog(`重新认证：邮箱 ${email} 已完成重新授权导入。`, 'ok');
+      } catch (error) {
+        if (isStopError(error)) {
+          throw error;
+        }
+        failureCount += 1;
+        await setStepStatus(7, 'failed').catch(() => {});
+        await addLog(`重新认证：邮箱 ${email} 处理失败：${getErrorMessage(error)}`, 'error');
+      }
+    }
+
+    await addLog(`重新认证：处理结束，成功 ${successCount} 个，失败 ${failureCount} 个。`, failureCount ? 'warn' : 'ok');
+    return {
+      ok: true,
+      total: emails.length,
+      successCount,
+      failureCount,
+    };
+  } finally {
+    reauthEmailListRunning = false;
+  }
+}
+
 function getEmailGeneratorLabel(generator) {
   const customEmailPoolGenerator = typeof CUSTOM_EMAIL_POOL_GENERATOR === 'string'
     ? CUSTOM_EMAIL_POOL_GENERATOR
@@ -11059,6 +11151,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   normalizeHotmailAccounts,
   normalizeMail2925Accounts,
   normalizePayPalAccounts,
+  normalizeEmailList,
   normalizeRunCount,
   AUTO_RUN_TIMER_KIND_SCHEDULED_START,
   notifyStepComplete,
@@ -11067,6 +11160,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   patchMail2925Account,
   registerTab,
   requestStop,
+  runReauthEmailList,
   probeIpProxyExit,
   resetState,
   resumeAutoRun,
