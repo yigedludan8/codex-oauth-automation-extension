@@ -788,6 +788,8 @@ test('signup flow helper finalizes step 3 submit by reusing signup verification 
 
 test('signup flow helper rewrites retryable step 3 finalize transport timeout into a Chinese error', async () => {
   const logs = [];
+  let attempts = 0;
+  const messages = [];
 
   const helpers = signupFlowApi.createSignupFlowHelpers({
     addLog: async (message, level = 'info') => {
@@ -806,7 +808,12 @@ test('signup flow helper rewrites retryable step 3 finalize transport timeout in
     isSignupEmailVerificationPageUrl: () => false,
     isSignupPasswordPageUrl: () => true,
     reuseOrCreateTab: async () => 31,
-    sendToContentScriptResilient: async () => {
+    sendToContentScriptResilient: async (_source, message) => {
+      messages.push(message);
+      if (message?.type === 'RECOVER_AUTH_RETRY_PAGE') {
+        return { recovered: false };
+      }
+      attempts += 1;
       throw new Error('Content script on signup-page did not respond in 45s. Try refreshing the tab and retry.');
     },
     setEmailState: async () => {},
@@ -817,12 +824,26 @@ test('signup flow helper rewrites retryable step 3 finalize transport timeout in
 
   await assert.rejects(
     () => helpers.finalizeSignupPasswordSubmitInTab(31, 'Secret123!', 3),
-    /步骤 3：认证页在提交后切换过程中页面通信超时/
+    /步骤 3：认证页在提交后切换过程中页面通信超时，连续 3 次确认仍未重新就绪/
   );
 
+  assert.equal(attempts, 3);
+  assert.equal(messages.filter((message) => message?.type === 'RECOVER_AUTH_RETRY_PAGE').length, 3);
   assert.deepStrictEqual(logs, [
     {
-      message: '步骤 3：认证页在提交后切换过程中页面通信超时，未能重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。',
+      message: '步骤 3：认证页在提交后切换过程中页面通信中断，正在尝试重新确认页面状态（1/3）。',
+      level: 'info',
+    },
+    {
+      message: '步骤 3：认证页在提交后切换过程中页面通信中断，正在尝试重新确认页面状态（2/3）。',
+      level: 'info',
+    },
+    {
+      message: '步骤 3：认证页在提交后切换过程中页面通信中断，正在尝试重新确认页面状态（3/3）。',
+      level: 'warn',
+    },
+    {
+      message: '步骤 3：认证页在提交后切换过程中页面通信超时，连续 3 次确认仍未重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。',
       level: 'warn',
     },
   ]);

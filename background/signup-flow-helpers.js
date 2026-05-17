@@ -216,46 +216,96 @@
         throw new Error(`认证页面标签页已关闭，无法完成步骤 ${step} 的提交后确认。`);
       }
 
-      await ensureContentScriptReadyOnTab('signup-page', tabId, {
-        inject: SIGNUP_PAGE_INJECT_FILES,
-        injectSource: 'signup-page',
-        timeoutMs: 45000,
-        retryDelayMs: 900,
-        logMessage: `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`,
-      });
+      const MAX_FINALIZE_ATTEMPTS = 3;
+      let lastRetryableError = null;
 
-      let result;
-      try {
-        result = await sendToContentScriptResilient('signup-page', {
-          type: 'PREPARE_SIGNUP_VERIFICATION',
-          step,
-          source: 'background',
-          payload: {
-            password: password || '',
-            prepareSource: 'step3_finalize',
-            prepareLogLabel: '步骤 3 收尾',
-          },
-        }, {
-          timeoutMs: 30000,
-          retryDelayMs: 700,
-          logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+      for (let attempt = 1; attempt <= MAX_FINALIZE_ATTEMPTS; attempt += 1) {
+        await ensureContentScriptReadyOnTab('signup-page', tabId, {
+          inject: SIGNUP_PAGE_INJECT_FILES,
+          injectSource: 'signup-page',
+          timeoutMs: 45000,
+          retryDelayMs: 900,
+          logMessage: `步骤 ${step}：认证页仍在切换，正在等待页面恢复后继续确认提交流程...`,
         });
-      } catch (error) {
-        if (isRetryableContentScriptTransportError(error)) {
-          const message = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，未能重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。`;
-          if (typeof addLog === 'function') {
-            await addLog(message, 'warn');
+
+        try {
+          const result = await sendToContentScriptResilient('signup-page', {
+            type: 'PREPARE_SIGNUP_VERIFICATION',
+            step,
+            source: 'background',
+            payload: {
+              password: password || '',
+              prepareSource: 'step3_finalize',
+              prepareLogLabel: '步骤 3 收尾',
+            },
+          }, {
+            timeoutMs: 30000,
+            retryDelayMs: 700,
+            logMessage: `步骤 ${step}：密码已提交，正在确认是否进入下一页面，必要时自动恢复重试页...`,
+          });
+
+          if (result?.error) {
+            throw new Error(result.error);
           }
-          throw new Error(message);
+          return result || {};
+        } catch (error) {
+          if (!isRetryableContentScriptTransportError(error)) {
+            throw error;
+          }
+
+          lastRetryableError = error;
+          const isLastAttempt = attempt >= MAX_FINALIZE_ATTEMPTS;
+          const message = `步骤 ${step}：认证页在提交后切换过程中页面通信中断，正在尝试重新确认页面状态（${attempt}/${MAX_FINALIZE_ATTEMPTS}）。`;
+          if (typeof addLog === 'function') {
+            await addLog(message, isLastAttempt ? 'warn' : 'info');
+          }
+
+          const recoverTimeoutMs = 12000;
+          try {
+            const recoverResult = await sendToContentScriptResilient('signup-page', {
+              type: 'RECOVER_AUTH_RETRY_PAGE',
+              step,
+              source: 'background',
+              payload: {
+                flow: 'signup',
+                step,
+                timeoutMs: recoverTimeoutMs,
+                maxClickAttempts: 2,
+                logLabel: `步骤 ${step}：提交后检测到页面通信中断，正在尝试恢复认证重试页`,
+              },
+            }, {
+              timeoutMs: recoverTimeoutMs,
+              responseTimeoutMs: recoverTimeoutMs,
+              retryDelayMs: 700,
+              logMessage: `步骤 ${step}：正在尝试恢复提交后的认证页面...`,
+            });
+
+            if (recoverResult?.error) {
+              throw new Error(recoverResult.error);
+            }
+          } catch (recoverError) {
+            if (!isRetryableContentScriptTransportError(recoverError)) {
+              throw recoverError;
+            }
+            if (typeof addLog === 'function') {
+              await addLog(
+                `步骤 ${step}：提交后页面恢复未完成，将继续重试状态确认。${recoverError?.message || recoverError}`,
+                'warn'
+              );
+            }
+          }
+
+          if (isLastAttempt) {
+            break;
+          }
         }
-        throw error;
       }
 
-      if (result?.error) {
-        throw new Error(result.error);
+      const timeoutMessage = `步骤 ${step}：认证页在提交后切换过程中页面通信超时，连续 ${MAX_FINALIZE_ATTEMPTS} 次确认仍未重新就绪，暂时无法确认是否进入下一页面。请重试当前轮。`;
+      if (typeof addLog === 'function') {
+        await addLog(timeoutMessage, 'warn');
       }
-
-      return result || {};
+      throw new Error(lastRetryableError ? timeoutMessage : `步骤 ${step}：提交后确认失败。`);
     }
 
     function getPreservedPhoneIdentityForEmailResolution(state = {}, options = {}) {

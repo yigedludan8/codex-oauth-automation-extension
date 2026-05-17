@@ -260,6 +260,94 @@ test('step 8 routes only a real phone verification page through sms helper', asy
   ]);
 });
 
+test('step 8 phone verification branch uses reopened signup tab id when auth tab is recreated in background', async () => {
+  const calls = {
+    helperCalls: [],
+    completions: [],
+  };
+
+  const executor = api.createStep8Executor({
+    addLog: async () => {},
+    chrome: {
+      tabs: {
+        update: async () => {},
+      },
+    },
+    CLOUDFLARE_TEMP_EMAIL_PROVIDER: 'cloudflare-temp-email',
+    completeStepFromBackground: async (step, payload) => {
+      calls.completions.push({ step, payload });
+    },
+    confirmCustomVerificationStepBypass: async () => {},
+    ensureStep8VerificationPageReady: async () => ({ state: 'phone_verification_page' }),
+    getOAuthFlowRemainingMs: async () => 5000,
+    getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => defaultTimeoutMs,
+    getMailConfig: () => ({
+      provider: 'qq',
+      label: 'QQ 邮箱',
+    }),
+    getState: async () => ({}),
+    getTabId: async () => null,
+    HOTMAIL_PROVIDER: 'hotmail-api',
+    isTabAlive: async () => false,
+    isVerificationMailPollingError: () => false,
+    LUCKMAIL_PROVIDER: 'luckmail-api',
+    phoneVerificationHelpers: {
+      completeLoginPhoneVerificationFlow: async (tabId, options) => {
+        calls.helperCalls.push({ tabId, visibleStep: options.visibleStep, state: options.state });
+        return { code: '654321' };
+      },
+    },
+    resolveVerificationStep: async () => {
+      throw new Error('real phone verification branch should not call email verification flow');
+    },
+    rerunStep7ForStep8Recovery: async () => {
+      throw new Error('real phone verification branch should not rerun step 7 in this test');
+    },
+    reuseOrCreateTab: async () => 77,
+    setState: async () => {},
+    shouldUseCustomRegistrationEmail: () => false,
+    STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS: 25000,
+    STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS: 8,
+    throwIfStopped: () => {},
+  });
+
+  await executor.executeStep8({
+    visibleStep: 8,
+    accountIdentifierType: 'phone',
+    signupPhoneCompletedActivation: {
+      activationId: 'signup-done',
+      phoneNumber: '66959916439',
+    },
+    oauthUrl: 'https://oauth.example/latest',
+  });
+
+  assert.deepStrictEqual(calls.helperCalls, [
+    {
+      tabId: 77,
+      visibleStep: 8,
+      state: {
+        visibleStep: 8,
+        accountIdentifierType: 'phone',
+        signupPhoneCompletedActivation: {
+          activationId: 'signup-done',
+          phoneNumber: '66959916439',
+        },
+        oauthUrl: 'https://oauth.example/latest',
+      },
+    },
+  ]);
+  assert.deepStrictEqual(calls.completions, [
+    {
+      step: 8,
+      payload: {
+        phoneVerification: true,
+        loginPhoneVerification: true,
+        code: '654321',
+      },
+    },
+  ]);
+});
+
 test('step 8 submits add-email before polling the email verification code', async () => {
   const calls = {
     contentMessages: [],

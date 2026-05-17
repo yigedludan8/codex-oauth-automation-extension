@@ -387,13 +387,13 @@
     async function runStep8Attempt(state, runtime = {}) {
       const visibleStep = getVisibleStep(state, 8);
       activeFetchLoginCodeStep = visibleStep;
-      const authTabId = await getTabId('signup-page');
+      let authTabId = await getTabId('signup-page');
 
       if (!authTabId) {
         if (!state.oauthUrl) {
           throw new Error(`缺少登录用 OAuth 链接，请先完成步骤 ${getAuthLoginStepForVisibleStep(visibleStep)}。`);
         }
-        await reuseOrCreateTab('signup-page', state.oauthUrl, { background: true });
+        authTabId = await reuseOrCreateTab('signup-page', state.oauthUrl, { background: true });
       }
 
       const stateLastResendAt = Number(state?.loginVerificationRequestedAt) || 0;
