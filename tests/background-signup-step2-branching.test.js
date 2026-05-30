@@ -96,6 +96,7 @@ test('step 2 uses phone activation when resolved signup method is phone', async 
   const completedPayloads = [];
   const sequence = [];
   const sentPayloads = [];
+  const markedPhones = [];
   const activation = {
     activationId: 'signup-activation',
     phoneNumber: '66959916439',
@@ -124,6 +125,10 @@ test('step 2 uses phone activation when resolved signup method is phone', async 
     }),
     getTabId: async () => 14,
     isTabAlive: async () => true,
+    markSignupPhoneNumberUsed: async (phoneNumber) => {
+      markedPhones.push(phoneNumber);
+      return true;
+    },
     phoneVerificationHelpers: {
       prepareSignupPhoneActivation: async () => {
         sequence.push('prepareSignupPhoneActivation');
@@ -160,6 +165,7 @@ test('step 2 uses phone activation when resolved signup method is phone', async 
     'prepareSignupPhoneActivation',
     'submitSignupPhone',
   ]);
+  assert.deepStrictEqual(markedPhones, ['66959916439']);
   assert.deepStrictEqual(sentPayloads, [
     {
       signupMethod: 'phone',
@@ -182,6 +188,94 @@ test('step 2 uses phone activation when resolved signup method is phone', async 
       },
     },
   ]);
+});
+
+test('step 2 skips used signup phone activations and submits a fresh number', async () => {
+  const completedPayloads = [];
+  const sequence = [];
+  const sentPayloads = [];
+  const markedPhones = [];
+  const cancelledActivations = [];
+  const fetchedActivations = [
+    {
+      activationId: 'used-activation',
+      phoneNumber: '+66 95 991 0001',
+      provider: 'hero-sms',
+      countryId: 52,
+      countryLabel: 'Thailand',
+    },
+    {
+      activationId: 'fresh-activation',
+      phoneNumber: '+66 95 991 0002',
+      provider: 'hero-sms',
+      countryId: 52,
+      countryLabel: 'Thailand',
+    },
+  ];
+
+  const executor = step2Api.createStep2Executor({
+    addLog: async () => {},
+    chrome: { tabs: { update: async () => {} } },
+    completeNodeFromBackground: async (step, payload) => {
+      completedPayloads.push({ step, payload });
+    },
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureSignupEntryPageReady: async () => ({ tabId: 17 }),
+    ensureSignupPostIdentityPageReadyInTab: async () => ({
+      state: 'phone_verification_page',
+      url: 'https://auth.openai.com/phone-verification',
+    }),
+    getTabId: async () => 17,
+    hasUsedSignupPhoneNumber: (_state, phoneNumber) => /\+66 95 991 0001|66959910001/.test(String(phoneNumber || '')),
+    isTabAlive: async () => true,
+    markSignupPhoneNumberUsed: async (phoneNumber) => {
+      markedPhones.push(phoneNumber);
+      return true;
+    },
+    phoneVerificationHelpers: {
+      prepareSignupPhoneActivation: async () => {
+        sequence.push('prepareSignupPhoneActivation');
+        return fetchedActivations.shift();
+      },
+      cancelSignupPhoneActivation: async (_state, activation) => {
+        cancelledActivations.push(activation?.activationId || '');
+      },
+    },
+    resolveSignupMethod: () => 'phone',
+    resolveSignupEmailForFlow: async () => {
+      throw new Error('email resolver should not run for phone signup');
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'ENSURE_SIGNUP_PHONE_ENTRY_READY') {
+        sequence.push('ensureSignupPhoneEntryReady');
+        return { ready: true, state: 'phone_entry' };
+      }
+      sequence.push('submitSignupPhone');
+      sentPayloads.push(message.payload);
+      return { submitted: true };
+    },
+    OPENAI_AUTH_INJECT_FILES: [],
+  });
+
+  await executor.executeStep2({ signupMethod: 'phone' });
+
+  assert.deepStrictEqual(sequence, [
+    'ensureSignupPhoneEntryReady',
+    'prepareSignupPhoneActivation',
+    'prepareSignupPhoneActivation',
+    'submitSignupPhone',
+  ]);
+  assert.deepStrictEqual(cancelledActivations, ['used-activation']);
+  assert.deepStrictEqual(markedPhones, ['+66 95 991 0002']);
+  assert.deepStrictEqual(sentPayloads, [
+    {
+      signupMethod: 'phone',
+      phoneNumber: '+66 95 991 0002',
+      countryId: 52,
+      countryLabel: 'Thailand',
+    },
+  ]);
+  assert.equal(completedPayloads[0].payload.signupPhoneActivation.activationId, 'fresh-activation');
 });
 
 test('step 2 reuses existing signup phone activation without acquiring a new number', async () => {

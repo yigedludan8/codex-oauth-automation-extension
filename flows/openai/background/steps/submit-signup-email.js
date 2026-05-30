@@ -12,7 +12,9 @@
       ensureSignupPostEmailPageReadyInTab,
       ensureSignupPostIdentityPageReadyInTab = ensureSignupPostEmailPageReadyInTab,
       getTabId,
+      hasUsedSignupPhoneNumber = () => false,
       isTabAlive,
+      markSignupPhoneNumberUsed = async () => false,
       phoneVerificationHelpers = null,
       resolveSignupMethod = () => 'email',
       resolveSignupEmailForFlow,
@@ -281,6 +283,39 @@
       ).trim();
     }
 
+    async function cancelFilteredSignupPhoneActivation(state = {}, activation = null) {
+      if (!activation || typeof phoneVerificationHelpers?.cancelSignupPhoneActivation !== 'function') {
+        return;
+      }
+      await phoneVerificationHelpers.cancelSignupPhoneActivation(state, activation).catch(() => {});
+    }
+
+    async function acquireUnusedSignupPhoneActivation(state = {}) {
+      const MAX_USED_PHONE_FILTER_ATTEMPTS = 20;
+      let latestState = state;
+
+      for (let attempt = 1; attempt <= MAX_USED_PHONE_FILTER_ATTEMPTS; attempt += 1) {
+        const activation = await phoneVerificationHelpers.prepareSignupPhoneActivation(latestState);
+        const phoneNumber = String(activation?.phoneNumber || '').trim();
+        if (!phoneNumber) {
+          throw new Error('步骤 2：接码平台返回的手机号为空。');
+        }
+        if (!hasUsedSignupPhoneNumber(latestState, phoneNumber)) {
+          return activation;
+        }
+
+        await addLog(`步骤 2：取到的手机号 ${phoneNumber} 已在已使用集合中，正在重新获取新号码（${attempt}/${MAX_USED_PHONE_FILTER_ATTEMPTS}）。`, 'warn');
+        await cancelFilteredSignupPhoneActivation(latestState, activation);
+        latestState = {
+          ...latestState,
+          signupPhoneNumber: '',
+          signupPhoneActivation: null,
+        };
+      }
+
+      throw new Error(`步骤 2：连续 ${MAX_USED_PHONE_FILTER_ATTEMPTS} 次取到已使用手机号，已停止当前轮以避免死循环。`);
+    }
+
     async function resolveSignupPhoneForStep2(state = {}) {
       const existingActivation = normalizeSignupPhoneActivationForStep2(state?.signupPhoneActivation);
       if (existingActivation?.phoneNumber) {
@@ -303,7 +338,7 @@
       if (typeof phoneVerificationHelpers?.prepareSignupPhoneActivation !== 'function') {
         throw new Error('手机号注册流程不可用：接码模块尚未初始化。');
       }
-      const activation = await phoneVerificationHelpers.prepareSignupPhoneActivation(state);
+      const activation = await acquireUnusedSignupPhoneActivation(state);
       return {
         phoneNumber: activation.phoneNumber,
         activation,
@@ -348,6 +383,7 @@
 
       const signupPhone = await resolveSignupPhoneForStep2(state);
       const { phoneNumber, activation } = signupPhone;
+      await markSignupPhoneNumberUsed(phoneNumber);
       let step2Result = await submitSignupPhone(phoneNumber, activation, {
         timeoutMs: 45000,
         retryDelayMs: 700,

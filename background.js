@@ -754,6 +754,7 @@ const PERSISTENT_ALIAS_STATE_KEYS = [
   'preservedAliases',
   'icloudAliasCache',
   'icloudAliasCacheAt',
+  'usedSignupPhoneNumbers',
 ];
 const ACCOUNT_RUN_HISTORY_STORAGE_KEY = 'accountRunHistory';
 const SIGNUP_METHOD_EMAIL = 'email';
@@ -1520,6 +1521,7 @@ const DEFAULT_STATE = {
   preservedAliases: {},
   icloudAliasCache: [],
   icloudAliasCacheAt: 0,
+  usedSignupPhoneNumbers: {},
   logs: [], // 侧边栏展示的运行日志。
   ...PERSISTED_SETTING_DEFAULTS, // 合并 chrome.storage.local 中持久化保存的用户配置。
   luckmailApiKey: '',
@@ -4120,13 +4122,15 @@ async function getPersistedAliasState() {
     const stored = await chrome.storage.local.get(PERSISTENT_ALIAS_STATE_KEYS);
     const manualAliasUsage = normalizeBooleanMap(stored.manualAliasUsage);
     const preservedAliases = normalizeBooleanMap(stored.preservedAliases);
+    const usedSignupPhoneNumbers = normalizeUsedSignupPhoneNumbers(stored.usedSignupPhoneNumbers);
     return {
       manualAliasUsage,
-    preservedAliases,
-    icloudAliasCache: normalizeIcloudAliasCacheList(stored.icloudAliasCache, {
-      usedEmails: toNormalizedEmailSet(manualAliasUsage),
-      preservedEmails: toNormalizedEmailSet(preservedAliases),
-    }),
+      preservedAliases,
+      usedSignupPhoneNumbers,
+      icloudAliasCache: normalizeIcloudAliasCacheList(stored.icloudAliasCache, {
+        usedEmails: toNormalizedEmailSet(manualAliasUsage),
+        preservedEmails: toNormalizedEmailSet(preservedAliases),
+      }),
       icloudAliasCacheAt: Math.max(0, Number(stored.icloudAliasCacheAt) || 0),
     };
   } catch (err) {
@@ -4134,6 +4138,7 @@ async function getPersistedAliasState() {
     return {
       manualAliasUsage: {},
       preservedAliases: {},
+      usedSignupPhoneNumbers: {},
       icloudAliasCache: [],
       icloudAliasCacheAt: 0,
     };
@@ -4240,6 +4245,9 @@ async function setState(updates) {
     }
     if (Object.prototype.hasOwnProperty.call(sessionUpdates, 'icloudAliasCacheAt')) {
       persistentAliasUpdates.icloudAliasCacheAt = Math.max(0, Number(sessionUpdates.icloudAliasCacheAt) || 0);
+    }
+    if (Object.prototype.hasOwnProperty.call(sessionUpdates, 'usedSignupPhoneNumbers')) {
+      persistentAliasUpdates.usedSignupPhoneNumbers = normalizeUsedSignupPhoneNumbers(sessionUpdates.usedSignupPhoneNumbers);
     }
     if (Object.keys(persistentAliasUpdates).length > 0) {
       await chrome.storage.local.set(persistentAliasUpdates);
@@ -4487,6 +4495,50 @@ function broadcastIcloudAliasesChanged(payload = {}) {
 
 function normalizePhoneIdentityDigits(value = '') {
   return String(value || '').replace(/\D+/g, '');
+}
+
+function normalizeUsedSignupPhoneNumbers(value = {}) {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : {};
+  const normalized = {};
+  for (const [rawPhone, used] of Object.entries(source)) {
+    const digits = normalizePhoneIdentityDigits(rawPhone);
+    if (!digits || !used) {
+      continue;
+    }
+    normalized[digits] = true;
+  }
+  return normalized;
+}
+
+function hasUsedSignupPhoneNumber(state = {}, phoneNumber = '') {
+  const digits = normalizePhoneIdentityDigits(phoneNumber);
+  if (!digits) {
+    return false;
+  }
+  const usedPhones = normalizeUsedSignupPhoneNumbers(state?.usedSignupPhoneNumbers);
+  return Boolean(usedPhones[digits]);
+}
+
+async function markSignupPhoneNumberUsed(phoneNumber, options = {}) {
+  const digits = normalizePhoneIdentityDigits(phoneNumber);
+  if (!digits) {
+    return false;
+  }
+
+  const state = options?.state || await getState();
+  const usedSignupPhoneNumbers = normalizeUsedSignupPhoneNumbers(state?.usedSignupPhoneNumbers);
+  if (usedSignupPhoneNumbers[digits]) {
+    return false;
+  }
+
+  usedSignupPhoneNumbers[digits] = true;
+  await setState({ usedSignupPhoneNumbers });
+  if (!options?.silent) {
+    broadcastDataUpdate({ usedSignupPhoneNumbers });
+  }
+  return true;
 }
 
 function getPhoneActivationPhoneNumber(activation = null) {
@@ -5033,6 +5085,7 @@ async function resetState() {
       'accounts',
       'tabRegistry',
       'sourceLastUrls',
+      'usedSignupPhoneNumbers',
       'reusablePhoneActivation',
       'freeReusablePhoneActivation',
       'phoneReusableActivationPool',
@@ -5104,6 +5157,11 @@ async function resetState() {
     accounts: prev.accounts || [],
     tabRegistry: prev.tabRegistry || {},
     sourceLastUrls: prev.sourceLastUrls || {},
+    usedSignupPhoneNumbers: normalizeUsedSignupPhoneNumbers(
+      Object.keys(prev.usedSignupPhoneNumbers || {}).length
+        ? prev.usedSignupPhoneNumbers
+        : persistedAliasState.usedSignupPhoneNumbers
+    ),
     luckmailApiKey: String(prev.luckmailApiKey || ''),
     luckmailBaseUrl: normalizeLuckmailBaseUrl(prev.luckmailBaseUrl),
     luckmailEmailType: normalizeLuckmailEmailType(prev.luckmailEmailType),
@@ -13903,7 +13961,9 @@ const step2Executor = self.MultiPageBackgroundStep2?.createStep2Executor({
   ensureSignupPostEmailPageReadyInTab,
   ensureSignupPostIdentityPageReadyInTab: signupFlowHelpers.ensureSignupPostIdentityPageReadyInTab,
   getTabId,
+  hasUsedSignupPhoneNumber,
   isTabAlive,
+  markSignupPhoneNumberUsed,
   phoneVerificationHelpers,
   resolveSignupMethod,
   resolveSignupEmailForFlow,
