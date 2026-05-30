@@ -44,6 +44,7 @@
       throwIfAutoRunSessionStopped,
       waitForRunningNodesToFinish,
     } = deps;
+    const AUTO_RUN_GLOBAL_EXIT_RESTART_MAX = 10;
 
     function getRunningWorkflowNodes(state = {}) {
       if (typeof getRunningNodeIds === 'function') {
@@ -686,9 +687,14 @@
         let reuseExistingProgress = resumingCurrentRound;
         const currentRoundState = await getState();
         const keepSameEmailUntilAddPhone = autoRunSkipFailures && shouldKeepCustomMailProviderPoolEmail(currentRoundState);
-        const maxAttemptsForRound = autoRunSkipFailures
+        let usedGlobalExitRestartCount = 0;
+        const allowsGlobalExitRestartFallback = !autoRunSkipFailures || targetRun >= totalRuns;
+        const standardMaxAttemptsForRound = autoRunSkipFailures
           ? (keepSameEmailUntilAddPhone ? Number.MAX_SAFE_INTEGER : AUTO_RUN_MAX_RETRIES_PER_ROUND + 1)
           : Math.max(1, attemptRun);
+        const maxAttemptsForRound = allowsGlobalExitRestartFallback && Number.isFinite(standardMaxAttemptsForRound)
+          ? standardMaxAttemptsForRound + AUTO_RUN_GLOBAL_EXIT_RESTART_MAX
+          : standardMaxAttemptsForRound;
 
         while (attemptRun <= maxAttemptsForRound) {
           runtime.set({
@@ -770,6 +776,56 @@
             if (record) {
               roundRecordAppended = true;
             }
+          };
+
+          const restartCurrentRoundOnGlobalExit = async (triggerLabel, reason) => {
+            if (!allowsGlobalExitRestartFallback || usedGlobalExitRestartCount >= AUTO_RUN_GLOBAL_EXIT_RESTART_MAX) {
+              if (allowsGlobalExitRestartFallback && usedGlobalExitRestartCount >= AUTO_RUN_GLOBAL_EXIT_RESTART_MAX) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮触发${triggerLabel}，退出兜底重开已达到 ${AUTO_RUN_GLOBAL_EXIT_RESTART_MAX} 次上限，将按原逻辑结束全部轮执行。`,
+                  'warn'
+                );
+              }
+              return false;
+            }
+
+            usedGlobalExitRestartCount += 1;
+            cancelPendingCommands('当前轮触发退出兜底重开。');
+            await broadcastStopToContentScripts();
+            await broadcastAutoRunStatus('retrying', {
+              currentRun: targetRun,
+              totalRuns,
+              attemptRun,
+              sessionId,
+            });
+            await addLog(
+              `第 ${targetRun}/${totalRuns} 轮触发${triggerLabel}，原本将结束全部轮执行，现直接重开当前轮（${usedGlobalExitRestartCount}/${AUTO_RUN_GLOBAL_EXIT_RESTART_MAX}）。`,
+              'warn'
+            );
+            if (reason) {
+              await addLog(`退出兜底原因：${reason}`, 'warn');
+            }
+            forceFreshTabsNextRun = true;
+            try {
+              await sleepWithStop(AUTO_RUN_RETRY_DELAY_MS);
+            } catch (sleepError) {
+              if (isStopError(sleepError)) {
+                stoppedEarly = true;
+                await appendRoundRecordIfNeeded('stopped', getErrorMessage(sleepError), sleepError);
+                await addLog(`第 ${targetRun}/${totalRuns} 轮已被用户停止`, 'warn');
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                return true;
+              }
+              throw sleepError;
+            }
+            attemptRun += 1;
+            reuseExistingProgress = false;
+            return true;
           };
 
           try {
@@ -857,6 +913,12 @@
             });
 
             if (blockedByAddPhone) {
+              if (await restartCurrentRoundOnGlobalExit(' add-phone/手机号页', reason)) {
+                if (stoppedEarly) {
+                  break;
+                }
+                continue;
+              }
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
               await setState({
@@ -892,6 +954,12 @@
             }
 
             if (blockedByPhoneNoSupply) {
+              if (await restartCurrentRoundOnGlobalExit(' 接码号池暂无可用号码', reason)) {
+                if (stoppedEarly) {
+                  break;
+                }
+                continue;
+              }
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
               await setState({
@@ -927,6 +995,12 @@
             }
 
             if (blockedByPlusNonFreeTrial) {
+              if (await restartCurrentRoundOnGlobalExit(' Plus 今日应付金额非 0', reason)) {
+                if (stoppedEarly) {
+                  break;
+                }
+                continue;
+              }
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
               await setState({
@@ -962,6 +1036,12 @@
             }
 
             if (blockedByGpcPageFlowEnded) {
+              if (await restartCurrentRoundOnGlobalExit(' GPC 页面流程结束', reason)) {
+                if (stoppedEarly) {
+                  break;
+                }
+                continue;
+              }
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
               await setState({
@@ -997,6 +1077,12 @@
             }
 
             if (blockedBySignupUserAlreadyExists) {
+              if (await restartCurrentRoundOnGlobalExit(' user_already_exists/用户已存在', reason)) {
+                if (stoppedEarly) {
+                  break;
+                }
+                continue;
+              }
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
               await setState({
@@ -1032,6 +1118,12 @@
             }
 
             if (blockedByStep4Route405) {
+              if (await restartCurrentRoundOnGlobalExit(' 步骤 4 连续 405 恢复失败', reason)) {
+                if (stoppedEarly) {
+                  break;
+                }
+                continue;
+              }
               roundSummary.status = 'failed';
               roundSummary.finalFailureReason = reason;
               await setState({
@@ -1152,6 +1244,13 @@
               }
               attemptRun += 1;
               reuseExistingProgress = false;
+              continue;
+            }
+
+            if (await restartCurrentRoundOnGlobalExit(' 当前轮最终失败', reason)) {
+              if (stoppedEarly) {
+                break;
+              }
               continue;
             }
 
