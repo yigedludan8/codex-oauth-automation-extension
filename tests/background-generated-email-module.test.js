@@ -19,6 +19,16 @@ test('generated email helper module exposes a factory', () => {
   assert.equal(typeof api?.createGeneratedEmailHelpers, 'function');
 });
 
+test('generated email helper formats local-part timestamp as yyyyMMddHHmmssSSS', () => {
+  const api = loadGeneratedEmailHelpersApi();
+  const helpers = api.createGeneratedEmailHelpers();
+
+  assert.equal(
+    helpers.formatEmailLocalPartTimestamp(new Date(2026, 4, 30, 14, 35, 56, 98)),
+    '20260530143556098'
+  );
+});
+
 test('generated email helper falls back to normal generator when 2925 is in receive mode', async () => {
   const api = loadGeneratedEmailHelpersApi();
   const events = [];
@@ -282,7 +292,7 @@ test('generated email helper uses the regular temp email domain when random subd
     name: requests[0].body.name,
     domain: 'mail.example.com',
   });
-  assert.match(requests[0].body.name, /^[a-z0-9]+$/);
+  assert.match(requests[0].body.name, /^[a-z]{6}\d{17}[a-z]\d[a-z]\d$/);
 });
 
 test('generated email helper requests random subdomain creation while preserving the returned address', async () => {

@@ -419,6 +419,99 @@ test('step 2 reacquires phone when fetched number already exists in used-signup-
   assert.equal(completedPayloads[0].payload.signupPhoneActivation.activationId, 'fresh-activation');
 });
 
+test('step 2 releases stale SMSBower signup activation before acquiring a fresh number', async () => {
+  const completedPayloads = [];
+  const sequence = [];
+  const sentPayloads = [];
+  const cancelledActivations = [];
+  const logs = [];
+  const staleActivation = {
+    activationId: 'stale-smsbower',
+    phoneNumber: '40735432349',
+    provider: 'smsbower',
+    countryId: 0,
+    countryLabel: '俄罗斯联邦 (Russian Federation)',
+  };
+  const freshActivation = {
+    activationId: 'fresh-smsbower',
+    phoneNumber: '46701234567',
+    provider: 'smsbower',
+    countryId: 46,
+    countryLabel: '瑞典',
+  };
+
+  const executor = step2Api.createStep2Executor({
+    addLog: async (message, level = 'info') => {
+      logs.push({ message, level });
+    },
+    chrome: { tabs: { update: async () => {} } },
+    completeStepFromBackground: async (step, payload) => {
+      completedPayloads.push({ step, payload });
+    },
+    ensureContentScriptReadyOnTab: async () => {},
+    ensureSignupEntryPageReady: async () => ({ tabId: 18 }),
+    ensureSignupPostIdentityPageReadyInTab: async () => ({
+      state: 'phone_verification_page',
+      url: 'https://auth.openai.com/phone-verification',
+    }),
+    getTabId: async () => 18,
+    isTabAlive: async () => true,
+    markSignupPhoneNumberUsed: async () => true,
+    phoneVerificationHelpers: {
+      normalizeActivation: (record) => record || null,
+      prepareSignupPhoneActivation: async (state) => {
+        sequence.push(`prepare:${state.signupPhoneActivation ? state.signupPhoneActivation.activationId : 'none'}`);
+        return freshActivation;
+      },
+      cancelSignupPhoneActivation: async (_state, activation) => {
+        sequence.push(`cancel:${activation.activationId}`);
+        cancelledActivations.push(activation.activationId);
+      },
+    },
+    resolveSignupMethod: () => 'phone',
+    resolveSignupEmailForFlow: async () => {
+      throw new Error('email resolver should not run for phone signup');
+    },
+    sendToContentScriptResilient: async (_source, message) => {
+      if (message.type === 'ENSURE_SIGNUP_PHONE_ENTRY_READY') {
+        sequence.push('ensureSignupPhoneEntryReady');
+        return { ready: true, state: 'phone_entry' };
+      }
+      sequence.push('submitSignupPhone');
+      sentPayloads.push(message.payload);
+      return { submitted: true };
+    },
+    SIGNUP_PAGE_INJECT_FILES: [],
+  });
+
+  await executor.executeStep2({
+    signupMethod: 'phone',
+    phoneSmsProvider: 'smsbower',
+    signupPhoneActivation: staleActivation,
+    signupPhoneNumber: staleActivation.phoneNumber,
+    accountIdentifierType: 'phone',
+    accountIdentifier: staleActivation.phoneNumber,
+  });
+
+  assert.deepStrictEqual(sequence, [
+    'ensureSignupPhoneEntryReady',
+    'cancel:stale-smsbower',
+    'prepare:none',
+    'submitSignupPhone',
+  ]);
+  assert.deepStrictEqual(cancelledActivations, ['stale-smsbower']);
+  assert.deepStrictEqual(sentPayloads, [
+    {
+      signupMethod: 'phone',
+      phoneNumber: '46701234567',
+      countryId: 46,
+      countryLabel: '瑞典',
+    },
+  ]);
+  assert.equal(completedPayloads[0].payload.signupPhoneActivation, freshActivation);
+  assert.ok(logs.some(({ message }) => /取新注册手机号前先释放遗留接码订单 40735432349/.test(message)));
+});
+
 test('step 2 stops with an explicit error instead of silently skipping 3/4/5 on chatgpt home', async () => {
   const completedPayloads = [];
   const logs = [];
@@ -787,6 +880,8 @@ test('signup flow helper finalizes step 3 submit by reusing signup verification 
     source: 'background',
     payload: {
       password: 'Secret123!',
+      accountIdentifierType: '',
+      signupMethod: '',
       prepareSource: 'step3_finalize',
       prepareLogLabel: '步骤 3 收尾',
     },

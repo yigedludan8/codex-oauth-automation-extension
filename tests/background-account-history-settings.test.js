@@ -261,6 +261,8 @@ return {
   assert.equal(api.normalizePersistentSettingValue('fiveSimMinPrice', '0'), '');
   assert.equal(api.normalizePersistentSettingValue('fiveSimOperator', ''), 'any');
   assert.equal(api.normalizePersistentSettingValue('smsBowerApiKey', ' demo-smsbower '), ' demo-smsbower ');
+  assert.deepStrictEqual(api.normalizePersistentSettingValue('smsBowerAgentStats', { 3237: { noCodeCount: 1 } }), { 3237: { noCodeCount: 1 } });
+  assert.deepStrictEqual(api.normalizePersistentSettingValue('smsBowerTierCooldowns', []), {});
   assert.equal(api.normalizePersistentSettingValue('smsBowerCountryId', ' 16 '), 16);
   assert.equal(api.normalizePersistentSettingValue('smsBowerCountryId', ''), 52);
   assert.equal(api.normalizePersistentSettingValue('smsBowerCountryLabel', ''), '泰国 (Thailand)');

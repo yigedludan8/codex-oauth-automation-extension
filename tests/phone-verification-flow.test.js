@@ -143,8 +143,11 @@ test('signup phone helper persists signup runtime state without touching add-pho
 test('signup phone helper times out acquisition before persisting runtime state', async () => {
   const setStateCalls = [];
   const requests = [];
+  const logs = [];
   const helpers = api.createPhoneVerificationHelpers({
-    addLog: async () => {},
+    addLog: async (message) => {
+      logs.push(message);
+    },
     ensureStep8SignupPageReady: async () => {},
     fetchImpl: async (url) => {
       const parsedUrl = new URL(url);
@@ -193,6 +196,12 @@ test('signup phone helper times out acquisition before persisting runtime state'
     false
   );
   assert.ok(requests.includes('getPrices'));
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(
+    logs.some((message) => /已从 .* 获取号码/.test(message)),
+    false
+  );
+  assert.equal(requests.includes('setStatus'), true);
 });
 
 test('signup phone helper uses getRentNumber when temporary signup phone toggle is enabled', async () => {
@@ -2312,47 +2321,80 @@ test('phone verification helper polls and parses NexSMS verification codes', asy
   assert.equal(statusUpdates.length >= 1, true);
 });
 
-test('phone verification helper acquires a number from SMSBower with ordered fallback countries', async () => {
+test('phone verification helper acquires SMSBower numbers from ranked single-agent queue', async () => {
   const requests = [];
+  const logs = [];
   const helpers = api.createPhoneVerificationHelpers({
-    addLog: async () => {},
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
     ensureStep8SignupPageReady: async () => {},
     fetchImpl: async (url) => {
       const parsedUrl = new URL(url);
       requests.push(parsedUrl);
       const action = parsedUrl.searchParams.get('action');
-      const country = Number(parsedUrl.searchParams.get('country'));
 
-      if (action === 'getPricesV2') {
-        if (country === 16) {
-          return {
-            ok: true,
-            status: 200,
-            text: async () => JSON.stringify({ 16: { dr: {} } }),
-          };
-        }
-        if (country === 52) {
-          return {
-            ok: true,
-            status: 200,
-            text: async () => JSON.stringify({ 52: { dr: { '0.134': 928 } } }),
-          };
-        }
+      if (parsedUrl.hostname === 'smsbower.app') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            services: {
+              247: {
+                countries: {
+                  se: {
+                    title: 'Sweden',
+                    activate_org_code: '46',
+                    alternative_title_locale: '瑞典|Sweden',
+                    positions: {
+                      '3|0.018': { price: 0.018, rank: { id: 3, description: 'bronze' }, count: 18, agent_ids: [3055] },
+                      '1|0.023': { price: 0.023, rank: { id: 1, description: 'gold' }, count: 309, agent_ids: [3237] },
+                      '1|0.031': { price: 0.031, rank: { id: 1, description: 'gold' }, count: 999, agent_ids: [3999] },
+                    },
+                  },
+                  za: {
+                    title: 'South Africa',
+                    activate_org_code: '31',
+                    positions: {
+                      '3|0.007': { price: 0.007, rank: { id: 3, description: 'bronze' }, count: 1800, agent_ids: [3000] },
+                    },
+                  },
+                  ar: {
+                    title: 'Argentina',
+                    activate_org_code: '39',
+                    alternative_title_locale: '阿根廷|Argentina',
+                    positions: {
+                      '3|0.009': { price: 0.009, rank: { id: 3, description: 'bronze' }, count: 1800, agent_ids: [3039] },
+                    },
+                  },
+                  ro: {
+                    title: 'Romania',
+                    activate_org_code: '32',
+                    alternative_title_locale: '罗马尼亚|Romania',
+                    positions: {
+                      '3|0.009': { price: 0.009, rank: { id: 3, description: 'bronze' }, count: 1800, agent_ids: [3032] },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        };
       }
 
       if (action === 'getNumber') {
-        if (country === 16) {
+        if (parsedUrl.searchParams.get('providerIds') === '3055') {
           return {
             ok: true,
             status: 200,
             text: async () => 'NO_NUMBERS',
           };
         }
-        if (country === 52) {
+        if (parsedUrl.searchParams.get('providerIds') === '3237') {
           return {
             ok: true,
             status: 200,
-            text: async () => 'ACCESS_NUMBER:sb-123:66959916439',
+            text: async () => 'ACCESS_NUMBER:sb-123:46701234567',
           };
         }
       }
@@ -2362,9 +2404,6 @@ test('phone verification helper acquires a number from SMSBower with ordered fal
     getState: async () => ({
       phoneSmsProvider: 'smsbower',
       smsBowerApiKey: 'smsbower-key',
-      smsBowerCountryOrder: [16, 52],
-      smsBowerCountryLabel: 'Thailand',
-      heroSmsActivationRetryRounds: 1,
     }),
     sendToContentScriptResilient: async () => ({}),
     setState: async () => {},
@@ -2375,77 +2414,80 @@ test('phone verification helper acquires a number from SMSBower with ordered fal
   const activation = await helpers.requestPhoneActivation({
     phoneSmsProvider: 'smsbower',
     smsBowerApiKey: 'smsbower-key',
-    smsBowerCountryOrder: [16, 52],
-    smsBowerCountryLabel: 'Thailand',
-    heroSmsActivationRetryRounds: 1,
   });
 
-  assert.deepStrictEqual(activation, {
-    activationId: 'sb-123',
-    phoneNumber: '66959916439',
-    provider: 'smsbower',
-    serviceCode: 'dr',
-    countryId: 52,
-    countryLabel: 'Thailand',
-    successfulUses: 0,
-    maxUses: 1,
-  });
-  assert.equal(requests[0].searchParams.get('action'), 'getPricesV2');
-  assert.equal(requests[0].searchParams.get('service'), 'dr');
-  assert.equal(requests[0].searchParams.get('country'), '16');
-  assert.equal(requests[0].searchParams.get('api_key'), 'smsbower-key');
-  assert.equal(requests[1].searchParams.get('action'), 'getNumber');
-  assert.equal(requests[1].searchParams.get('service'), 'dr');
-  assert.equal(requests[1].searchParams.get('country'), '16');
-  assert.equal(requests[2].searchParams.get('action'), 'getPricesV2');
-  assert.equal(requests[2].searchParams.get('country'), '52');
-  assert.equal(requests[3].searchParams.get('action'), 'getNumber');
-  assert.equal(requests[3].searchParams.get('country'), '52');
+  assert.equal(activation.activationId, 'sb-123');
+  assert.equal(activation.phoneNumber, '46701234567');
+  assert.equal(activation.provider, 'smsbower');
+  assert.equal(activation.countryId, 46);
+  assert.equal(activation.countryLabel, '瑞典');
+  assert.equal(activation.smsBowerAgentId, '3237');
+  assert.equal(activation.rank, 'gold');
+  assert.equal(activation.statusAction, undefined);
+  assert.equal(requests[0].hostname, 'smsbower.app');
+  const getNumberRequests = requests.filter((request) => request.searchParams.get('action') === 'getNumber');
+  assert.equal(getNumberRequests[0].searchParams.get('country'), '46');
+  assert.equal(getNumberRequests[0].searchParams.get('providerIds'), '3055');
+  assert.equal(getNumberRequests[0].searchParams.get('maxPrice'), '0.018');
+  assert.equal(getNumberRequests[1].searchParams.get('providerIds'), '3237');
+  assert.equal(getNumberRequests[1].searchParams.get('maxPrice'), '0.023');
+  assert.equal(getNumberRequests.some((request) => request.searchParams.get('providerIds') === '3039'), false);
+  assert.equal(getNumberRequests.some((request) => request.searchParams.get('providerIds') === '3032'), false);
+  assert.equal(getNumberRequests.some((request) => request.searchParams.get('providerIds') === '3999'), false);
+  assert.ok(logs.some((entry) => /SMSBower Web 队列筛选/.test(entry.message)));
+  assert.ok(logs.some((entry) => /排除国家 3/.test(entry.message)));
+  assert.ok(logs.some((entry) => /超过 \$0\.03 1/.test(entry.message)));
+  assert.ok(logs.some((entry) => /最终候选 2/.test(entry.message)));
 });
 
-test('phone verification helper passes SMSBower minPrice and maxPrice and cancels out-of-range activation', async () => {
+test('phone verification helper caps SMSBower ranked queue attempts', async () => {
   const requests = [];
+  const logs = [];
   const helpers = api.createPhoneVerificationHelpers({
-    addLog: async () => {},
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
     ensureStep8SignupPageReady: async () => {},
     fetchImpl: async (url) => {
       const parsedUrl = new URL(url);
       requests.push(parsedUrl);
-      const action = parsedUrl.searchParams.get('action');
-      if (action === 'getPricesV2') {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => JSON.stringify({ 52: { dr: { '0.08': 10 } } }),
-        };
-      }
-      if (action === 'getNumber') {
+      if (parsedUrl.hostname === 'smsbower.app') {
+        const positions = {};
+        for (let index = 1; index <= 20; index += 1) {
+          positions[`3|0.${String(index).padStart(3, '0')}`] = {
+            price: Number(`0.${String(index).padStart(3, '0')}`),
+            rank: { id: 3, description: 'bronze' },
+            count: 100 + index,
+            agent_ids: [3000 + index],
+          };
+        }
         return {
           ok: true,
           status: 200,
           text: async () => JSON.stringify({
-            activationId: 'sb-out',
-            phoneNumber: '66959916439',
-            price: 0.12,
+            services: {
+              247: {
+                countries: {
+                  th: {
+                    title: 'Thailand',
+                    activate_org_code: '52',
+                    alternative_title_locale: '泰国|Thailand',
+                    positions,
+                  },
+                },
+              },
+            },
           }),
         };
       }
-      if (action === 'setStatus') {
-        return {
-          ok: true,
-          status: 200,
-          text: async () => 'ACCESS_CANCEL',
-        };
+      if (parsedUrl.searchParams.get('action') === 'getNumber') {
+        return { ok: true, status: 200, text: async () => 'NO_NUMBERS' };
       }
-      throw new Error(`Unexpected SMSBower action: ${action}`);
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
     },
     getState: async () => ({
       phoneSmsProvider: 'smsbower',
       smsBowerApiKey: 'smsbower-key',
-      smsBowerCountryOrder: [52],
-      heroSmsMinPrice: '0.05',
-      heroSmsMaxPrice: '0.1',
-      heroSmsActivationRetryRounds: 1,
     }),
     sendToContentScriptResilient: async () => ({}),
     setState: async () => {},
@@ -2457,20 +2499,159 @@ test('phone verification helper passes SMSBower minPrice and maxPrice and cancel
     () => helpers.requestPhoneActivation({
       phoneSmsProvider: 'smsbower',
       smsBowerApiKey: 'smsbower-key',
-      smsBowerCountryOrder: [52],
-      heroSmsMinPrice: '0.05',
-      heroSmsMaxPrice: '0.1',
-      heroSmsActivationRetryRounds: 1,
     }),
-    /outside configured price range/i
+    /rank queue exhausted/i
   );
 
-  const getNumber = requests.find((requestUrl) => requestUrl.searchParams.get('action') === 'getNumber');
-  assert.equal(getNumber.searchParams.get('minPrice'), '0.05');
-  assert.equal(getNumber.searchParams.get('maxPrice'), '0.08');
-  const setStatus = requests.find((requestUrl) => requestUrl.searchParams.get('action') === 'setStatus');
-  assert.equal(setStatus.searchParams.get('id'), 'sb-out');
-  assert.equal(setStatus.searchParams.get('status'), '8');
+  const getNumberRequests = requests.filter((request) => request.searchParams.get('action') === 'getNumber');
+  assert.equal(getNumberRequests.length, 12);
+  assert.ok(logs.some((entry) => /本轮最多尝试前 12 个/.test(entry.message)));
+  assert.ok(logs.some((entry) => /跳过剩余 8 个候选/.test(entry.message)));
+});
+
+test('phone verification helper skips SMSBower tier after repeated no-code cooldown', async () => {
+  const requests = [];
+  const logs = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      if (parsedUrl.hostname === 'smsbower.app') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            services: {
+              247: {
+                countries: {
+                  se: {
+                    title: 'Sweden',
+                    activate_org_code: '46',
+                    alternative_title_locale: '瑞典|Sweden',
+                    positions: {
+                      '1|0.023': { price: 0.023, rank: { id: 1, description: 'gold' }, count: 309, agent_ids: [3237] },
+                      '2|0.024': { price: 0.024, rank: { id: 2, description: 'silver' }, count: 309, agent_ids: [3238] },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        };
+      }
+      if (parsedUrl.searchParams.get('action') === 'getNumber') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'ACCESS_NUMBER:sb-124:46701234568',
+        };
+      }
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => ({
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+      smsBowerTierCooldowns: {
+        '46|dr|0.023|gold': {
+          noCodeCount: 5,
+          cooldownUntil: Date.now() + 15 * 60 * 1000,
+          updatedAt: Date.now(),
+        },
+      },
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await helpers.requestPhoneActivation({
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+    smsBowerTierCooldowns: {
+      '46|dr|0.023|gold': {
+        noCodeCount: 5,
+        cooldownUntil: Date.now() + 15 * 60 * 1000,
+        updatedAt: Date.now(),
+      },
+    },
+  });
+
+  const getNumberRequests = requests.filter((request) => request.searchParams.get('action') === 'getNumber');
+  assert.equal(activation.activationId, 'sb-124');
+  assert.equal(getNumberRequests.length, 1);
+  assert.equal(getNumberRequests[0].searchParams.get('providerIds'), '3238');
+  assert.equal(getNumberRequests[0].searchParams.get('maxPrice'), '0.024');
+  assert.ok(logs.some((entry) => /冷却中 1/.test(entry.message)));
+});
+
+test('phone verification helper skips manually blocked SMSBower agent 3246', async () => {
+  const requests = [];
+  const logs = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message, level) => {
+      logs.push({ message, level });
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      if (parsedUrl.hostname === 'smsbower.app') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            services: {
+              247: {
+                countries: {
+                  br: {
+                    title: 'Brazil',
+                    activate_org_code: '73',
+                    alternative_title_locale: '巴西|Brazil',
+                    positions: {
+                      '3|0.022': { price: 0.022, rank: { id: 3, description: 'bronze' }, count: 309, agent_ids: [3246] },
+                      '3|0.023': { price: 0.023, rank: { id: 3, description: 'bronze' }, count: 309, agent_ids: [3247] },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        };
+      }
+      if (parsedUrl.searchParams.get('action') === 'getNumber') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'ACCESS_NUMBER:sb-125:5511999999999',
+        };
+      }
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => ({
+      phoneSmsProvider: 'smsbower',
+      smsBowerApiKey: 'smsbower-key',
+    }),
+    sendToContentScriptResilient: async () => ({}),
+    setState: async () => {},
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await helpers.requestPhoneActivation({
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+  });
+
+  const getNumberRequests = requests.filter((request) => request.searchParams.get('action') === 'getNumber');
+  assert.equal(activation.smsBowerAgentId, '3247');
+  assert.equal(getNumberRequests.length, 1);
+  assert.equal(getNumberRequests[0].searchParams.get('providerIds'), '3247');
+  assert.ok(logs.some((entry) => /agent 拉黑 1\/2/.test(entry.message)));
 });
 
 test('phone verification helper polls and parses SMSBower verification codes', async () => {
@@ -2528,6 +2709,74 @@ test('phone verification helper polls and parses SMSBower verification codes', a
   assert.equal(pollCount, 2);
 });
 
+test('signup SMSBower code timeout records no-code counts for both agent and tier', async () => {
+  let currentState = {
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+    phoneCodeWaitSeconds: 15,
+    phoneCodeTimeoutWindows: 1,
+    phoneCodePollIntervalSeconds: 1,
+    phoneCodePollMaxRounds: 1,
+    smsBowerAgentStats: {
+      3237: { noCodeCount: 4, updatedAt: Date.now() },
+    },
+    smsBowerTierCooldowns: {
+      '46|dr|0.023|gold': { noCodeCount: 4, updatedAt: Date.now() },
+    },
+  };
+  const logs = [];
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message) => {
+      logs.push(String(message || ''));
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.searchParams.get('action') === 'getStatus') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'STATUS_WAIT_CODE',
+        };
+      }
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => currentState,
+    sendToContentScriptResilient: async () => ({}),
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await assert.rejects(
+    () => helpers.completeSignupPhoneVerificationFlow(1, {
+      activation: {
+        activationId: 'sb-timeout',
+        phoneNumber: '46701234567',
+        provider: 'smsbower',
+        serviceCode: 'dr',
+        countryId: 46,
+        countryLabel: '瑞典',
+        smsBowerAgentId: '3237',
+        smsBowerTierKey: '46|dr|0.023|gold',
+        rank: 'gold',
+        price: 0.023,
+        maxUses: 1,
+      },
+    }),
+    /等待手机验证码超时/
+  );
+
+  assert.equal(currentState.smsBowerAgentStats['3237'].noCodeCount, 5);
+  assert.ok(currentState.smsBowerAgentStats['3237'].blockedUntil > Date.now());
+  assert.equal(currentState.smsBowerTierCooldowns['46|dr|0.023|gold'].noCodeCount, 5);
+  assert.ok(currentState.smsBowerTierCooldowns['46|dr|0.023|gold'].cooldownUntil > Date.now());
+  assert.ok(logs.some((message) => /agent 3237 连续 5 个号未收到验证码/.test(message)));
+  assert.ok(logs.some((message) => /档位 46\|dr\|0\.023\|gold 连续 5 个号未收到验证码/.test(message)));
+});
+
 test('phone verification helper rejects SMSBower reuse and ignores temporary signup number flow during signup acquisition', async () => {
   const requests = [];
   const logs = [];
@@ -2547,11 +2796,26 @@ test('phone verification helper rejects SMSBower reuse and ignores temporary sig
       const parsedUrl = new URL(url);
       requests.push(parsedUrl);
       const action = parsedUrl.searchParams.get('action');
-      if (action === 'getPricesV2') {
+      if (parsedUrl.hostname === 'smsbower.app') {
         return {
           ok: true,
           status: 200,
-          text: async () => JSON.stringify({ 52: { dr: { '0.134': 928 } } }),
+          text: async () => JSON.stringify({
+            services: {
+              247: {
+                countries: {
+                  th: {
+                    title: 'Thailand',
+                    activate_org_code: '52',
+                    alternative_title_locale: '泰国|Thailand',
+                    positions: {
+                      '3|0.023': { price: 0.023, rank: { id: 3, description: 'bronze' }, count: 928, agent_ids: [3237] },
+                    },
+                  },
+                },
+              },
+            },
+          }),
         };
       }
       if (action === 'getNumber') {
@@ -2599,12 +2863,199 @@ test('phone verification helper rejects SMSBower reuse and ignores temporary sig
   assert.equal(activation.provider, 'smsbower');
   assert.deepStrictEqual(
     requests.map((request) => request.searchParams.get('action')),
-    ['getPricesV2', 'getNumber']
+    [null, 'getNumber']
   );
   assert.ok(logs.some((message) => /SMSBower .*临时租号|temporary signup phone numbers/i.test(message)));
+  assert.ok(
+    logs.some((message) => /已从 SMSBower \/ 泰国 获取号码 66959916439/.test(message)),
+    'signup acquisition log should use the actual SMSBower country label from the acquired activation'
+  );
   assert.equal(currentState.signupPhoneNumber, '66959916439');
   assert.equal(currentState.accountIdentifierType, 'phone');
   assert.equal(currentState.accountIdentifier, '66959916439');
+});
+
+test('signup SMSBower acquisition releases pending old orders before getting a new number', async () => {
+  const requests = [];
+  const logs = [];
+  let currentState = {
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+    smsBowerPendingActivations: [
+      {
+        activationId: 'old-smsbower',
+        phoneNumber: '40735432349',
+        provider: 'smsbower',
+        serviceCode: 'dr',
+        countryId: 73,
+        countryLabel: '巴西',
+        price: 0.022,
+        rank: 'bronze',
+        smsBowerAgentId: '3246',
+        smsBowerTierKey: '73|dr|0.022|bronze',
+        maxUses: 1,
+      },
+    ],
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async (message) => {
+      logs.push(String(message || ''));
+    },
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'setStatus') {
+        assert.equal(parsedUrl.searchParams.get('id'), 'old-smsbower');
+        assert.equal(parsedUrl.searchParams.get('status'), '8');
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'ACCESS_CANCEL',
+        };
+      }
+      if (parsedUrl.hostname === 'smsbower.app') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            services: {
+              247: {
+                countries: {
+                  se: {
+                    title: 'Sweden',
+                    activate_org_code: '46',
+                    alternative_title_locale: '瑞典|Sweden',
+                    positions: {
+                      '1|0.023': { price: 0.023, rank: { id: 1, description: 'gold' }, count: 309, agent_ids: [3237] },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        };
+      }
+      if (action === 'getNumber') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => 'ACCESS_NUMBER:new-smsbower:46701234567',
+        };
+      }
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => currentState,
+    sendToContentScriptResilient: async () => ({}),
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  const activation = await helpers.prepareSignupPhoneActivation(currentState);
+  const requestActions = requests.map((request) => request.searchParams.get('action'));
+
+  assert.equal(activation.activationId, 'new-smsbower');
+  assert.deepStrictEqual(requestActions, ['setStatus', null, 'getNumber']);
+  assert.ok(currentState.smsBowerAgentStats['3246'].noCodeCount >= 5);
+  assert.ok(currentState.smsBowerAgentStats['3246'].blockedUntil > Date.now());
+  assert.equal(currentState.smsBowerTierCooldowns['73|dr|0.022|bronze'].noCodeCount, 1);
+  assert.deepStrictEqual(
+    currentState.smsBowerPendingActivations.map((entry) => entry.activationId),
+    ['new-smsbower']
+  );
+  assert.ok(logs.some((message) => /取新 SMSBower 号码前发现 1 个未收尾旧订单/.test(message)));
+  assert.ok(logs.some((message) => /已释放旧 SMSBower 订单 40735432349/.test(message)));
+});
+
+test('signup SMSBower pending release failure does not double-count no-code on retry', async () => {
+  const requests = [];
+  let currentState = {
+    phoneSmsProvider: 'smsbower',
+    smsBowerApiKey: 'smsbower-key',
+    smsBowerPendingActivations: [
+      {
+        activationId: 'old-smsbower',
+        phoneNumber: '5519936264567',
+        provider: 'smsbower',
+        serviceCode: 'dr',
+        countryId: 73,
+        countryLabel: '巴西',
+        price: 0.022,
+        rank: 'bronze',
+        smsBowerAgentId: '3246',
+        smsBowerTierKey: '73|dr|0.022|bronze',
+        maxUses: 1,
+      },
+    ],
+  };
+  const helpers = api.createPhoneVerificationHelpers({
+    addLog: async () => {},
+    ensureStep8SignupPageReady: async () => {},
+    fetchImpl: async (url) => {
+      const parsedUrl = new URL(url);
+      requests.push(parsedUrl);
+      const action = parsedUrl.searchParams.get('action');
+      if (action === 'setStatus') {
+        return {
+          ok: false,
+          status: 500,
+          text: async () => 'temporary release failure',
+        };
+      }
+      if (parsedUrl.hostname === 'smsbower.app') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            services: {
+              247: {
+                countries: {
+                  se: {
+                    title: 'Sweden',
+                    activate_org_code: '46',
+                    alternative_title_locale: '瑞典|Sweden',
+                    positions: {
+                      '1|0.023': { price: 0.023, rank: { id: 1, description: 'gold' }, count: 309, agent_ids: [3237] },
+                    },
+                  },
+                },
+              },
+            },
+          }),
+        };
+      }
+      if (action === 'getNumber') {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => `ACCESS_NUMBER:new-smsbower-${requests.length}:46701234567`,
+        };
+      }
+      throw new Error(`Unexpected SMSBower request: ${parsedUrl.toString()}`);
+    },
+    getState: async () => currentState,
+    sendToContentScriptResilient: async () => ({}),
+    setState: async (updates) => {
+      currentState = { ...currentState, ...updates };
+    },
+    sleepWithStop: async () => {},
+    throwIfStopped: () => {},
+  });
+
+  await helpers.prepareSignupPhoneActivation(currentState);
+  assert.ok(currentState.smsBowerAgentStats['3246'].noCodeCount >= 5);
+  assert.ok(currentState.smsBowerAgentStats['3246'].blockedUntil > Date.now());
+  assert.equal(currentState.smsBowerTierCooldowns['73|dr|0.022|bronze'].noCodeCount, 1);
+  assert.equal(currentState.smsBowerPendingActivations.some((entry) => entry.smsBowerNoCodeRecorded), true);
+
+  await helpers.prepareSignupPhoneActivation(currentState);
+  assert.ok(currentState.smsBowerAgentStats['3246'].noCodeCount >= 5);
+  assert.ok(currentState.smsBowerAgentStats['3246'].blockedUntil > Date.now());
+  assert.equal(currentState.smsBowerTierCooldowns['73|dr|0.022|bronze'].noCodeCount, 1);
 });
 
 test('phone verification helper completes add-phone flow, clears current activation, and stores reusable number state', async () => {

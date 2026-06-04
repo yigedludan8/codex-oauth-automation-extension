@@ -731,6 +731,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   fiveSimMinPrice: '',
   fiveSimOperator: FIVE_SIM_OPERATOR,
   smsBowerApiKey: '',
+  smsBowerAgentStats: {},
+  smsBowerTierCooldowns: {},
   smsBowerCountryId: DEFAULT_SMS_BOWER_COUNTRY_ID,
   smsBowerCountryLabel: DEFAULT_SMS_BOWER_COUNTRY_LABEL,
   smsBowerCountryOrder: [],
@@ -846,6 +848,7 @@ const DEFAULT_STATE = {
   reusablePhoneActivation: null,
   freeReusablePhoneActivation: null,
   phoneReusableActivationPool: [],
+  smsBowerPendingActivations: [],
   usedSignupPhoneNumbers: {},
   signupPhoneNumber: '',
   signupPhoneActivation: null,
@@ -2585,6 +2588,9 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeFiveSimOperator(value);
     case 'smsBowerApiKey':
       return String(value || '');
+    case 'smsBowerAgentStats':
+    case 'smsBowerTierCooldowns':
+      return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
     case 'smsBowerCountryId':
       return normalizeSmsBowerCountryId(value);
     case 'smsBowerCountryLabel':
@@ -3311,6 +3317,7 @@ async function resetState() {
       'reusablePhoneActivation',
       'freeReusablePhoneActivation',
       'phoneReusableActivationPool',
+      'smsBowerPendingActivations',
       'luckmailApiKey',
       'luckmailBaseUrl',
       'luckmailEmailType',
@@ -3362,6 +3369,15 @@ async function resetState() {
   )
     ? prev.freeReusablePhoneActivation
     : null;
+  const smsBowerPendingActivations = Array.isArray(prev.smsBowerPendingActivations)
+    ? prev.smsBowerPendingActivations.filter((entry) => (
+      entry
+      && typeof entry === 'object'
+      && !Array.isArray(entry)
+      && String(entry.activationId ?? entry.id ?? entry.activation ?? '').trim()
+      && String(entry.phoneNumber ?? entry.number ?? entry.phone ?? '').trim()
+    ))
+    : [];
   await chrome.storage.session.clear();
   await chrome.storage.session.set({
     ...DEFAULT_STATE,
@@ -3392,6 +3408,7 @@ async function resetState() {
     // Keep free reuse phone activation until the user clears or the flow retires it.
     freeReusablePhoneActivation,
     phoneReusableActivationPool,
+    smsBowerPendingActivations,
     preferredIcloudHost: prev.preferredIcloudHost || '',
   });
 }
@@ -4279,6 +4296,24 @@ function generateRandomSuffix(length = 6) {
   return suffix;
 }
 
+function formatEmailLocalPartTimestamp(date = new Date()) {
+  const pad = (value, length = 2) => String(value).padStart(length, '0');
+  const timestamp = [
+    date.getFullYear(),
+    pad(date.getMonth() + 1),
+    pad(date.getDate()),
+    pad(date.getHours()),
+    pad(date.getMinutes()),
+    pad(date.getSeconds()),
+    pad(date.getMilliseconds(), 3),
+  ].join('');
+  return /^\d{17}$/.test(timestamp) ? timestamp : formatEmailLocalPartTimestamp(new Date());
+}
+
+function generateTimestampedEmailTag(prefix = '', suffixLength = 6) {
+  return `${String(prefix || '').trim().toLowerCase()}${formatEmailLocalPartTimestamp()}${generateRandomSuffix(suffixLength)}`;
+}
+
 const GMAIL_ALIAS_WORDS = [
   'amber', 'apple', 'ash', 'berry', 'birch', 'blue', 'brook', 'cedar',
   'cloud', 'clover', 'coast', 'cocoa', 'coral', 'dawn', 'delta', 'echo',
@@ -4360,7 +4395,7 @@ function buildGeneratedAliasEmail(state) {
     if (!parsed) {
       throw new Error('Gmail 原邮箱格式不正确，请填写类似 name@gmail.com 的地址。');
     }
-    return `${parsed.localPart}+${generateRandomWordAliasTag()}@${parsed.domain}`;
+    return `${parsed.localPart}+${generateTimestampedEmailTag(generateRandomWordAliasTag(), 4)}@${parsed.domain}`;
   }
 
   if (!emailPrefix) {
@@ -4368,7 +4403,7 @@ function buildGeneratedAliasEmail(state) {
   }
 
   if (provider === '2925' && isGeneratedAliasProvider(state)) {
-    return `${emailPrefix}${generateRandomSuffix(6)}@2925.com`;
+    return `${emailPrefix}${generateTimestampedEmailTag('', 6)}@2925.com`;
   }
 
   throw new Error(`未支持的别名邮箱类型：${provider}`);
@@ -4544,16 +4579,18 @@ function buildGeneratedAliasEmail(state) {
     return utils.buildManagedAliasEmail(
       provider,
       baseEmail,
-      provider === GMAIL_PROVIDER ? generateRandomWordAliasTag() : generateRandomSuffix(6)
+      provider === GMAIL_PROVIDER
+        ? generateTimestampedEmailTag(generateRandomWordAliasTag(), 4)
+        : generateTimestampedEmailTag('', 6)
     );
   }
 
   const parsedBaseEmail = parseManagedAliasBaseEmail(baseEmail, provider);
   if (provider === GMAIL_PROVIDER) {
-    return `${parsedBaseEmail.localPart}+${generateRandomWordAliasTag()}@${parsedBaseEmail.domain}`;
+    return `${parsedBaseEmail.localPart}+${generateTimestampedEmailTag(generateRandomWordAliasTag(), 4)}@${parsedBaseEmail.domain}`;
   }
   if (provider === '2925') {
-    return `${parsedBaseEmail.localPart}${generateRandomSuffix(6)}@${parsedBaseEmail.domain}`;
+    return `${parsedBaseEmail.localPart}${generateTimestampedEmailTag('', 6)}@${parsedBaseEmail.domain}`;
   }
 
   throw new Error(`未支持的别名邮箱类型：${provider}`);

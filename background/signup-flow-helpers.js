@@ -11,6 +11,7 @@
       ensureMail2925AccountForFlow,
       ensureLuckmailPurchaseForFlow,
       fetchGeneratedEmail,
+      getState = async () => ({}),
       isGeneratedAliasProvider,
       isReusableGeneratedAliasEmail,
       isHotmailProvider,

@@ -27,25 +27,36 @@
       throwIfStopped,
     } = deps;
 
+    function formatEmailLocalPartTimestamp(date = new Date()) {
+      const pad = (value, length = 2) => String(value).padStart(length, '0');
+      const timestamp = [
+        date.getFullYear(),
+        pad(date.getMonth() + 1),
+        pad(date.getDate()),
+        pad(date.getHours()),
+        pad(date.getMinutes()),
+        pad(date.getSeconds()),
+        pad(date.getMilliseconds(), 3),
+      ].join('');
+      return /^\d{17}$/.test(timestamp) ? timestamp : formatEmailLocalPartTimestamp(new Date());
+    }
+
     function generateCloudflareAliasLocalPart() {
       const letters = 'abcdefghijklmnopqrstuvwxyz';
       const digits = '0123456789';
-      const chars = [];
+      let prefix = '';
+      let suffix = '';
 
       for (let i = 0; i < 6; i++) {
-        chars.push(letters[Math.floor(Math.random() * letters.length)]);
+        prefix += letters[Math.floor(Math.random() * letters.length)];
       }
 
       for (let i = 0; i < 4; i++) {
-        chars.push(digits[Math.floor(Math.random() * digits.length)]);
+        const pool = i % 2 === 0 ? letters : digits;
+        suffix += pool[Math.floor(Math.random() * pool.length)];
       }
 
-      for (let i = chars.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        [chars[i], chars[j]] = [chars[j], chars[i]];
-      }
-
-      return chars.join('');
+      return `${prefix}${formatEmailLocalPartTimestamp()}${suffix}`;
     }
 
     async function fetchCloudflareEmail(state, options = {}) {
@@ -311,6 +322,7 @@
       fetchCloudflareTempEmailAddress,
       fetchDuckEmail,
       fetchGeneratedEmail,
+      formatEmailLocalPartTimestamp,
       generateCloudflareAliasLocalPart,
       requestCloudflareTempEmailJson,
     };

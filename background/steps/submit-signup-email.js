@@ -258,11 +258,45 @@
       return 'HeroSMS';
     }
 
+    function isSmsBowerProviderForStep2(state = {}, activation = null) {
+      return String(activation?.provider || state?.phoneSmsProvider || '').trim().toLowerCase() === 'smsbower';
+    }
+
     async function cancelFilteredSignupPhoneActivation(state = {}, activation = null) {
       if (!activation || typeof phoneVerificationHelpers?.cancelSignupPhoneActivation !== 'function') {
         return;
       }
       await phoneVerificationHelpers.cancelSignupPhoneActivation(state, activation).catch(() => {});
+    }
+
+    async function releaseStaleSignupPhoneActivationBeforeAcquire(state = {}) {
+      const staleActivation = normalizeSignupPhoneActivationForStep2(state?.signupPhoneActivation);
+      if (!staleActivation || typeof phoneVerificationHelpers?.cancelSignupPhoneActivation !== 'function') {
+        return state;
+      }
+      await addLog(
+        `步骤 2：取新注册手机号前先释放遗留接码订单 ${staleActivation.phoneNumber || staleActivation.activationId}。`,
+        'warn'
+      );
+      try {
+        await phoneVerificationHelpers.cancelSignupPhoneActivation(state, staleActivation);
+        await addLog('步骤 2：已请求释放遗留注册手机号接码订单。', 'warn');
+      } catch (error) {
+        await addLog(`步骤 2：释放遗留注册手机号接码订单失败，仍将继续取新号。原因：${getErrorMessage(error)}`, 'warn');
+      }
+      return {
+        ...state,
+        signupPhoneNumber: '',
+        signupPhoneActivation: null,
+        signupPhoneVerificationRequestedAt: null,
+        signupPhoneVerificationPurpose: '',
+        accountIdentifierType: String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+          ? null
+          : state?.accountIdentifierType,
+        accountIdentifier: String(state?.accountIdentifierType || '').trim().toLowerCase() === 'phone'
+          ? ''
+          : state?.accountIdentifier,
+      };
     }
 
     async function acquireUnusedSignupPhoneActivation(state = {}) {
@@ -294,6 +328,16 @@
     async function resolveSignupPhoneForStep2(state = {}) {
       const existingActivation = normalizeSignupPhoneActivationForStep2(state?.signupPhoneActivation);
       if (existingActivation?.phoneNumber) {
+        if (isSmsBowerProviderForStep2(state, existingActivation)) {
+          const latestState = await releaseStaleSignupPhoneActivationBeforeAcquire(state);
+          const providerLabel = getPhoneSmsProviderLabelForStep2(latestState);
+          await addLog(`步骤 2：手机号注册入口已就绪，正在从 ${providerLabel} 获取注册手机号...`);
+          const activation = await acquireUnusedSignupPhoneActivation(latestState);
+          return {
+            phoneNumber: activation.phoneNumber,
+            activation,
+          };
+        }
         await addLog(`步骤 2：复用当前注册手机号 ${existingActivation.phoneNumber}，不重新获取号码。`);
         return {
           phoneNumber: existingActivation.phoneNumber,
@@ -315,7 +359,8 @@
       }
       const providerLabel = getPhoneSmsProviderLabelForStep2(state);
       await addLog(`步骤 2：手机号注册入口已就绪，正在从 ${providerLabel} 获取注册手机号...`);
-      const activation = await acquireUnusedSignupPhoneActivation(state);
+      const latestState = await releaseStaleSignupPhoneActivationBeforeAcquire(state);
+      const activation = await acquireUnusedSignupPhoneActivation(latestState);
       return {
         phoneNumber: activation.phoneNumber,
         activation,
